@@ -1,0 +1,18 @@
+# Core dependencies from original system
+
+faiss-cpu==1.8.0
+numpy==1.26.4
+pillow==10.3.0
+python-telegram-bot==21.0.1
+requests==2.31.0
+torch==2.2.2
+torchvision==0.17.2
+python-dotenv==1.0.1
+
+# New dependencies for improved system
+accelerate==0.25.0
+transformers==4.37.0
+open-clip-torch==2.32.0
+
+# Optional: For better performance
+faiss-gpu==1.8.0  # Use instead of faiss-cpu if you have CUDA

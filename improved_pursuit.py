@@ -112,9 +112,24 @@ def migrate_existing_data():
     print(f"JSONDATA: Found {len(old_json_groups)} characters, skipped {old_json_skipped_count}")
     print(f"JSONDATA: Missing {old_json_missing_file_count} images")
     pprint(old_json_data["3004"])
-    
-    return
 
+    # Merge old JSON data into character groups
+    for char, records in old_json_groups.items():
+        if char not in character_groups:
+            character_groups[char] = []
+        for record in records:
+            # Check if image file exists locally
+            local_path = f"{furtrack_images}/{record['post_id']}.jpg"
+            if os.path.exists(local_path):
+                character_groups[char].append({
+                    'post_id': record['post_id'],
+                    'url': record['url'],
+                    'raw': record['raw']
+                })
+            else:
+                print(f"Skipping {record['post_id']} - image file does not exist")
+    
+    print(f"Total characters after merging JSON data: {len(character_groups)}")
     # Process each character
     migrated_count = 0
     for char_name, records in character_groups.items():
@@ -327,7 +342,6 @@ class ImprovedFursuitIdentifier:
         
         for i, metadata in enumerate(metadata_list):
             embedding_id = start_embedding_id + i
-
 
             # TODO: add confidence score
             c.execute("""

@@ -30,6 +30,20 @@ old_json_path = f"{old_src_path}/furtrack_data.json"
 
 DEVICE_NAME = "cuda" if torch.cuda.is_available() else ("mps" if torch.backends.mps.is_available() else "cpu")
 
+def delete_databases():
+    """Reset the new improved system by clearing the database and index"""
+    print("Resetting new improved system...")
+    if os.path.exists(db_path):
+        os.remove(db_path)
+        print(f"Deleted database at {db_path}")
+    else:
+        print(f"No database found at {db_path}, nothing to delete.")
+    if os.path.exists(index_path):
+        os.remove(index_path)
+        print(f"Deleted index at {index_path}")
+    else:
+        print(f"No index found at {index_path}, nothing to delete.")
+
 def migrate_existing_data():
     """Migrate data from old system to new improved system"""
     
@@ -461,6 +475,7 @@ class ImprovedFursuitIdentifier:
 # Example usage and testing
 def main():
     if sys.argv[1] == "--migrate":
+        delete_databases()
         migrate_existing_data()
     sys.exit(0)
     if sys.argv[1] == "--add":

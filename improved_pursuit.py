@@ -4,6 +4,7 @@ import os
 import open_clip.convert
 import open_clip.utils
 
+os.environ['KMP_DUPLICATE_LIB_OK'] = 'True'  # Make it work on MacOS
 os.environ['FAISS_OPT_LEVEL'] = '' # prevent it from crashing
 import sys
 import numpy as np

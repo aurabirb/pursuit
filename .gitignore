@@ -6,3 +6,5 @@ embeddings
 *.pyc
 .python-version
 .env
+*.egg-info/
+.venv/

@@ -10,13 +10,21 @@ class Config:
     # Base paths
     BASE_DIR = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 
+    # Default file names
+    DEFAULT_DB_NAME = "pursuit.db"
+    DEFAULT_INDEX_NAME = "pursuit.index"
+    DEFAULT_CROPS_DIR = "pursuit_crops"
+
     # Database paths
-    DB_PATH = os.path.join(BASE_DIR, "furtrack_sam3.db")
-    INDEX_PATH = os.path.join(BASE_DIR, "faiss_sam3.index")
+    DB_PATH = os.path.join(BASE_DIR, DEFAULT_DB_NAME)
+    INDEX_PATH = os.path.join(BASE_DIR, DEFAULT_INDEX_NAME)
+    CROPS_DIR = os.path.join(BASE_DIR, DEFAULT_CROPS_DIR)
     IMAGES_DIR = os.path.join(BASE_DIR, "furtrack_images")
 
-    # Old system paths for migration
+    # Legacy paths (for reference)
     OLD_DB_PATH = os.path.join(BASE_DIR, "furtrack.db")
+    LEGACY_DB_PATH = os.path.join(BASE_DIR, "furtrack_sam3.db")
+    LEGACY_INDEX_PATH = os.path.join(BASE_DIR, "faiss_sam3.index")
 
     # Model settings
     SAM3_MODEL = "sam3"  # SAM3 with text prompts

@@ -81,19 +81,50 @@ SAM3 ready!
 ### Identify a character
 
 ```bash
-python -m sam3_pursuit.api.cli identify photo.jpg
+pursuit identify photo.jpg
+pursuit identify photo.jpg --segment --concept "mascot"
 ```
 
 ### Add images for a new character
 
 ```bash
-python -m sam3_pursuit.api.cli add -c "CharacterName" img1.jpg img2.jpg img3.jpg
+pursuit add -c "CharacterName" img1.jpg img2.jpg img3.jpg
+pursuit add -c "CharacterName" img1.jpg --segment --save-crops
+```
+
+### Test segmentation on an image
+
+```bash
+pursuit segment photo.jpg
+pursuit segment photo.jpg --output-dir ./crops/ --json
+```
+
+### View database entries
+
+```bash
+pursuit show --by-character "CharacterName"
+pursuit show --by-id 42 --json
+pursuit show --by-post "uuid-here"
+```
+
+### Bulk ingest images
+
+```bash
+# From directory structure: data_dir/character_name/*.jpg
+pursuit ingest --source directory --data-dir ./characters/
+
+# From FurTrack download
+pursuit ingest --source furtrack --data-dir ./furtrack_data/
+
+# From NFC25 dataset
+pursuit ingest --source nfc25 --data-dir ./nfc25-fursuits/
 ```
 
 ### View database statistics
 
 ```bash
-python -m sam3_pursuit.api.cli stats
+pursuit stats
+pursuit stats --json
 ```
 
 ### Run Telegram bot
@@ -153,29 +184,37 @@ for r in results:
 
 ```bash
 # Add images for individual characters
-python -m sam3_pursuit.api.cli add -c "CharName1" char1_*.jpg
-python -m sam3_pursuit.api.cli add -c "CharName2" char2_*.jpg
+pursuit add -c "CharName1" char1_*.jpg
+pursuit add -c "CharName2" char2_*.jpg
+
+# With segmentation (for multi-character photos)
+pursuit add -c "CharName1" photo.jpg --segment
 ```
 
-### Option 2: Download from FurTrack
+### Option 2: Bulk ingest from directory
+
+Organize images as `characters/CharacterName/*.jpg`:
 
 ```bash
-# Download images for all characters (takes a while)
-python tools/download_furtrack.py --download-characters
-
-# Or download specific character
-python tools/download_furtrack.py --download-character "CharacterName"
-
-# Index downloaded images
-python tools/download_furtrack.py --index
+pursuit ingest --source directory --data-dir ./characters/
 ```
 
-### Option 3: Index NFC25 database
+### Option 3: Download from FurTrack
+
+```bash
+# Download images
+python tools/download_furtrack.py --download-characters
+
+# Ingest downloaded images
+pursuit ingest --source furtrack --data-dir .
+```
+
+### Option 4: Index NFC25 database
 
 If you have the NFC25 fursuit badge dataset:
 
 ```bash
-python tools/index_nfc25.py --data-dir /path/to/nfc25-fursuits
+pursuit ingest --source nfc25 --data-dir /path/to/nfc25-fursuits
 ```
 
 Expected directory structure:
@@ -222,16 +261,19 @@ pursuit/
 | File | Description |
 |------|-------------|
 | `sam3.pt` | SAM3 model weights (~3.5GB) |
-| `*.db` | SQLite database with detection metadata |
-| `*.index` | FAISS index with embeddings |
+| `pursuit.db` | SQLite database with detection metadata (default) |
+| `pursuit.index` | FAISS index with embeddings (default) |
+| `pursuit_crops/` | Saved crop images for debugging (when using `--save-crops`) |
 
-These files are gitignored. Each database/index pair represents a separate collection.
+These files are gitignored. Use `--db` and `--index` flags to use custom paths.
 
 ## Configuration
 
 Key settings in `sam3_pursuit/config.py`:
 
 ```python
+DEFAULT_DB_NAME = "pursuit.db"         # Default database file
+DEFAULT_INDEX_NAME = "pursuit.index"   # Default index file
 SAM3_MODEL = "sam3"                    # Model name
 DINOV2_MODEL = "facebook/dinov2-base"  # Embedding model
 EMBEDDING_DIM = 768                    # DINOv2 output dimension
@@ -252,14 +294,14 @@ DETECTION_CONFIDENCE = 0.5             # Minimum confidence threshold
 # Run unit tests
 python -m pytest tests/ -v
 
-# Test SAM3 segmentation
-python tools/test_segmentation.py segment
+# Test SAM3 segmentation on an image
+pursuit segment photo.jpg --output-dir ./debug/
 
-# Test full pipeline
-python tools/test_segmentation.py pipeline
+# Test with different concept
+pursuit segment photo.jpg --concept "mascot" --json
 
-# Visualize segmentation results
-python tools/test_segmentation.py visualize
+# View database entries for debugging
+pursuit show --by-character "CharName" --json
 ```
 
 ## Troubleshooting

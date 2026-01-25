@@ -1,5 +1,6 @@
 """SQLite database operations for fursuit detection storage."""
 
+import json
 import sqlite3
 from dataclasses import dataclass
 from datetime import datetime
@@ -22,6 +23,13 @@ class Detection:
     confidence: float
     segmentor_model: str = "unknown"  # Track which segmentor was used
     created_at: Optional[datetime] = None
+    # New fields for source tracking and debugging
+    source_filename: Optional[str] = None  # Original filename
+    source_url: Optional[str] = None  # Source URL if downloaded
+    is_cropped: bool = False  # Whether this is a segmented crop vs full image
+    segmentation_concept: Optional[str] = None  # SAM3 concept used (e.g., "fursuiter")
+    preprocessing_info: Optional[str] = None  # JSON with preprocessing details
+    crop_path: Optional[str] = None  # Path to saved crop for debugging
 
 
 class Database:
@@ -53,24 +61,37 @@ class Database:
                 bbox_height INTEGER,
                 confidence REAL DEFAULT 0.0,
                 segmentor_model TEXT DEFAULT 'unknown',
-                created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+                created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+                source_filename TEXT,
+                source_url TEXT,
+                is_cropped INTEGER DEFAULT 0,
+                segmentation_concept TEXT,
+                preprocessing_info TEXT,
+                crop_path TEXT
             )
         """)
 
         c.execute("CREATE INDEX IF NOT EXISTS idx_post_id ON detections(post_id)")
         c.execute("CREATE INDEX IF NOT EXISTS idx_character_name ON detections(character_name)")
         c.execute("CREATE INDEX IF NOT EXISTS idx_embedding_id ON detections(embedding_id)")
-
-        # Migration: add segmentor_model column if missing (for existing databases)
-        c.execute("PRAGMA table_info(detections)")
-        columns = [row[1] for row in c.fetchall()]
-        if "segmentor_model" not in columns:
-            c.execute("ALTER TABLE detections ADD COLUMN segmentor_model TEXT DEFAULT 'sam2.1_s'")
-            # Mark existing records as SAM2 (since that's what was used before)
-            c.execute("UPDATE detections SET segmentor_model = 'sam2.1_s' WHERE segmentor_model IS NULL OR segmentor_model = 'unknown'")
-
-        # Create index on segmentor_model (after migration ensures column exists)
         c.execute("CREATE INDEX IF NOT EXISTS idx_segmentor_model ON detections(segmentor_model)")
+
+        # Add missing columns for existing databases (non-destructive)
+        c.execute("PRAGMA table_info(detections)")
+        existing_columns = {row[1] for row in c.fetchall()}
+
+        new_columns = [
+            ("source_filename", "TEXT"),
+            ("source_url", "TEXT"),
+            ("is_cropped", "INTEGER DEFAULT 0"),
+            ("segmentation_concept", "TEXT"),
+            ("preprocessing_info", "TEXT"),
+            ("crop_path", "TEXT"),
+        ]
+
+        for col_name, col_type in new_columns:
+            if col_name not in existing_columns:
+                c.execute(f"ALTER TABLE detections ADD COLUMN {col_name} {col_type}")
 
         conn.commit()
         conn.close()
@@ -89,8 +110,10 @@ class Database:
 
         c.execute("""
             INSERT INTO detections
-            (post_id, character_name, embedding_id, bbox_x, bbox_y, bbox_width, bbox_height, confidence, segmentor_model)
-            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
+            (post_id, character_name, embedding_id, bbox_x, bbox_y, bbox_width, bbox_height,
+             confidence, segmentor_model, source_filename, source_url, is_cropped,
+             segmentation_concept, preprocessing_info, crop_path)
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
         """, (
             detection.post_id,
             detection.character_name,
@@ -100,7 +123,13 @@ class Database:
             detection.bbox_width,
             detection.bbox_height,
             detection.confidence,
-            detection.segmentor_model
+            detection.segmentor_model,
+            detection.source_filename,
+            detection.source_url,
+            1 if detection.is_cropped else 0,
+            detection.segmentation_concept,
+            detection.preprocessing_info,
+            detection.crop_path
         ))
 
         row_id = c.lastrowid
@@ -128,8 +157,10 @@ class Database:
         for detection in detections:
             c.execute("""
                 INSERT INTO detections
-                (post_id, character_name, embedding_id, bbox_x, bbox_y, bbox_width, bbox_height, confidence, segmentor_model)
-                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
+                (post_id, character_name, embedding_id, bbox_x, bbox_y, bbox_width, bbox_height,
+                 confidence, segmentor_model, source_filename, source_url, is_cropped,
+                 segmentation_concept, preprocessing_info, crop_path)
+                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
             """, (
                 detection.post_id,
                 detection.character_name,
@@ -139,7 +170,13 @@ class Database:
                 detection.bbox_width,
                 detection.bbox_height,
                 detection.confidence,
-                detection.segmentor_model
+                detection.segmentor_model,
+                detection.source_filename,
+                detection.source_url,
+                1 if detection.is_cropped else 0,
+                detection.segmentation_concept,
+                detection.preprocessing_info,
+                detection.crop_path
             ))
             row_ids.append(c.lastrowid)
 
@@ -147,6 +184,35 @@ class Database:
         conn.close()
 
         return row_ids
+
+    def _row_to_detection(self, row) -> Detection:
+        """Convert a database row to a Detection object."""
+        return Detection(
+            id=row[0],
+            post_id=row[1],
+            character_name=row[2],
+            embedding_id=row[3],
+            bbox_x=row[4],
+            bbox_y=row[5],
+            bbox_width=row[6],
+            bbox_height=row[7],
+            confidence=row[8],
+            segmentor_model=row[9],
+            created_at=row[10],
+            source_filename=row[11] if len(row) > 11 else None,
+            source_url=row[12] if len(row) > 12 else None,
+            is_cropped=bool(row[13]) if len(row) > 13 else False,
+            segmentation_concept=row[14] if len(row) > 14 else None,
+            preprocessing_info=row[15] if len(row) > 15 else None,
+            crop_path=row[16] if len(row) > 16 else None,
+        )
+
+    _SELECT_FIELDS = """
+        id, post_id, character_name, embedding_id, bbox_x, bbox_y,
+        bbox_width, bbox_height, confidence, segmentor_model, created_at,
+        source_filename, source_url, is_cropped, segmentation_concept,
+        preprocessing_info, crop_path
+    """
 
     def get_detection_by_embedding_id(self, embedding_id: int) -> Optional[Detection]:
         """Get a detection by its embedding ID.
@@ -160,9 +226,8 @@ class Database:
         conn = sqlite3.connect(self.db_path)
         c = conn.cursor()
 
-        c.execute("""
-            SELECT id, post_id, character_name, embedding_id, bbox_x, bbox_y,
-                   bbox_width, bbox_height, confidence, segmentor_model, created_at
+        c.execute(f"""
+            SELECT {self._SELECT_FIELDS}
             FROM detections WHERE embedding_id = ?
         """, (embedding_id,))
 
@@ -170,19 +235,31 @@ class Database:
         conn.close()
 
         if row:
-            return Detection(
-                id=row[0],
-                post_id=row[1],
-                character_name=row[2],
-                embedding_id=row[3],
-                bbox_x=row[4],
-                bbox_y=row[5],
-                bbox_width=row[6],
-                bbox_height=row[7],
-                confidence=row[8],
-                segmentor_model=row[9],
-                created_at=row[10]
-            )
+            return self._row_to_detection(row)
+        return None
+
+    def get_detection_by_id(self, detection_id: int) -> Optional[Detection]:
+        """Get a detection by its database row ID.
+
+        Args:
+            detection_id: The database row ID.
+
+        Returns:
+            Detection object or None if not found.
+        """
+        conn = sqlite3.connect(self.db_path)
+        c = conn.cursor()
+
+        c.execute(f"""
+            SELECT {self._SELECT_FIELDS}
+            FROM detections WHERE id = ?
+        """, (detection_id,))
+
+        row = c.fetchone()
+        conn.close()
+
+        if row:
+            return self._row_to_detection(row)
         return None
 
     def get_detections_by_post_id(self, post_id: str) -> list[Detection]:
@@ -197,31 +274,15 @@ class Database:
         conn = sqlite3.connect(self.db_path)
         c = conn.cursor()
 
-        c.execute("""
-            SELECT id, post_id, character_name, embedding_id, bbox_x, bbox_y,
-                   bbox_width, bbox_height, confidence, segmentor_model, created_at
+        c.execute(f"""
+            SELECT {self._SELECT_FIELDS}
             FROM detections WHERE post_id = ?
         """, (post_id,))
 
         rows = c.fetchall()
         conn.close()
 
-        return [
-            Detection(
-                id=row[0],
-                post_id=row[1],
-                character_name=row[2],
-                embedding_id=row[3],
-                bbox_x=row[4],
-                bbox_y=row[5],
-                bbox_width=row[6],
-                bbox_height=row[7],
-                confidence=row[8],
-                segmentor_model=row[9],
-                created_at=row[10]
-            )
-            for row in rows
-        ]
+        return [self._row_to_detection(row) for row in rows]
 
     def get_detections_by_character(self, character_name: str) -> list[Detection]:
         """Get all detections for a character.
@@ -235,31 +296,15 @@ class Database:
         conn = sqlite3.connect(self.db_path)
         c = conn.cursor()
 
-        c.execute("""
-            SELECT id, post_id, character_name, embedding_id, bbox_x, bbox_y,
-                   bbox_width, bbox_height, confidence, segmentor_model, created_at
+        c.execute(f"""
+            SELECT {self._SELECT_FIELDS}
             FROM detections WHERE character_name = ?
         """, (character_name,))
 
         rows = c.fetchall()
         conn.close()
 
-        return [
-            Detection(
-                id=row[0],
-                post_id=row[1],
-                character_name=row[2],
-                embedding_id=row[3],
-                bbox_x=row[4],
-                bbox_y=row[5],
-                bbox_width=row[6],
-                bbox_height=row[7],
-                confidence=row[8],
-                segmentor_model=row[9],
-                created_at=row[10]
-            )
-            for row in rows
-        ]
+        return [self._row_to_detection(row) for row in rows]
 
     def get_stats(self) -> dict:
         """Get database statistics.

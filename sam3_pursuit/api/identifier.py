@@ -1,10 +1,11 @@
 """Main public API for fursuit identification."""
 
+import json
 import os
 import sqlite3
-import json
 from dataclasses import dataclass
 from io import BytesIO
+from pathlib import Path
 from typing import Optional
 
 import numpy as np
@@ -147,7 +148,10 @@ class SAM3FursuitIdentifier:
         character_name: str,
         image_paths: list[str],
         batch_size: int = Config.DEFAULT_BATCH_SIZE,
-        use_segmentation: bool = False
+        use_segmentation: bool = False,
+        concept: str = Config.DEFAULT_CONCEPT,
+        save_crops: bool = False,
+        source_url: Optional[str] = None,
     ) -> int:
         """Add images for a character to the index.
 
@@ -156,6 +160,9 @@ class SAM3FursuitIdentifier:
             image_paths: List of image paths or URLs.
             batch_size: Batch size for processing.
             use_segmentation: Whether to segment images (for multi-character images).
+            concept: SAM3 text prompt concept (default: "fursuiter").
+            save_crops: Whether to save crop images for debugging.
+            source_url: Optional source URL for tracking origin.
 
         Returns:
             Number of images successfully added.
@@ -166,6 +173,7 @@ class SAM3FursuitIdentifier:
             batch_paths = image_paths[i:i + batch_size]
             batch_images = []
             batch_post_ids = []
+            batch_filenames = []
 
             # Load images
             for img_path in batch_paths:
@@ -175,6 +183,7 @@ class SAM3FursuitIdentifier:
                         continue
                     batch_images.append(image)
                     batch_post_ids.append(self._extract_post_id(img_path))
+                    batch_filenames.append(os.path.basename(img_path))
                 except Exception as e:
                     print(f"Error loading {img_path}: {e}")
                     continue
@@ -184,8 +193,8 @@ class SAM3FursuitIdentifier:
 
             if use_segmentation:
                 # Process each image with segmentation
-                for image, post_id in zip(batch_images, batch_post_ids):
-                    proc_results = self.pipeline.process(image)
+                for image, post_id, filename in zip(batch_images, batch_post_ids, batch_filenames):
+                    proc_results = self.pipeline.process(image, concept=concept)
                     for proc_result in proc_results:
                         self._add_single_embedding(
                             embedding=proc_result.embedding,
@@ -193,21 +202,32 @@ class SAM3FursuitIdentifier:
                             character_name=character_name,
                             bbox=proc_result.segmentation.bbox,
                             confidence=proc_result.segmentation.confidence,
-                            segmentor_model=proc_result.segmentor_model
+                            segmentor_model=proc_result.segmentor_model,
+                            source_filename=filename,
+                            source_url=source_url,
+                            is_cropped=True,
+                            segmentation_concept=concept,
+                            crop_image=proc_result.segmentation.crop if save_crops else None,
                         )
                         added_count += 1
             else:
                 # Batch process without segmentation
                 embeddings = self.pipeline.embed_batch(batch_images)
 
-                for embedding, post_id, image in zip(embeddings, batch_post_ids, batch_images):
+                for embedding, post_id, image, filename in zip(
+                    embeddings, batch_post_ids, batch_images, batch_filenames
+                ):
                     w, h = image.size
                     self._add_single_embedding(
                         embedding=embedding,
                         post_id=post_id,
                         character_name=character_name,
                         bbox=(0, 0, w, h),
-                        confidence=1.0
+                        confidence=1.0,
+                        source_filename=filename,
+                        source_url=source_url,
+                        is_cropped=False,
+                        segmentation_concept=None,
                     )
                     added_count += 1
 
@@ -225,7 +245,13 @@ class SAM3FursuitIdentifier:
         character_name: str,
         bbox: tuple[int, int, int, int],
         confidence: float,
-        segmentor_model: Optional[str] = None
+        segmentor_model: Optional[str] = None,
+        source_filename: Optional[str] = None,
+        source_url: Optional[str] = None,
+        is_cropped: bool = False,
+        segmentation_concept: Optional[str] = None,
+        preprocessing_info: Optional[dict] = None,
+        crop_image: Optional[Image.Image] = None,
     ):
         """Add a single embedding to the index and database."""
         # Add to FAISS index
@@ -234,6 +260,14 @@ class SAM3FursuitIdentifier:
         # Use current pipeline's segmentor model if not specified
         if segmentor_model is None:
             segmentor_model = self.pipeline.segmentor_model_name
+
+        # Save crop image if provided
+        crop_path = None
+        if crop_image is not None:
+            crops_dir = Path(Config.CROPS_DIR)
+            crops_dir.mkdir(exist_ok=True)
+            crop_path = str(crops_dir / f"{post_id}_{embedding_id}.jpg")
+            crop_image.convert("RGB").save(crop_path, quality=90)
 
         # Add to database
         detection = Detection(
@@ -246,7 +280,13 @@ class SAM3FursuitIdentifier:
             bbox_width=bbox[2],
             bbox_height=bbox[3],
             confidence=confidence,
-            segmentor_model=segmentor_model
+            segmentor_model=segmentor_model,
+            source_filename=source_filename,
+            source_url=source_url,
+            is_cropped=is_cropped,
+            segmentation_concept=segmentation_concept,
+            preprocessing_info=json.dumps(preprocessing_info) if preprocessing_info else None,
+            crop_path=crop_path,
         )
         self.db.add_detection(detection)
 

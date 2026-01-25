@@ -16,6 +16,9 @@ dependencies = [
     "python-dotenv>=1.0",
 ]
 
+[project.scripts]
+pursuit = "sam3_pursuit.api.cli:main"
+
 [build-system]
 requires = ["setuptools>=61.0"]
 build-backend = "setuptools.build_meta"

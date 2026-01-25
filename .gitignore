@@ -19,6 +19,7 @@ __pycache__/
 datasets/
 furtrack_images/
 embeddings/
+runs/
 
 # Backups
 *.bak
@@ -26,3 +27,4 @@ embeddings/
 # IDE
 .vscode/
 .idea/
+

@@ -70,19 +70,16 @@ class FursuitSegmentor:
         print("SAM3 loaded successfully - text prompts enabled!")
         return model, model_name
 
-    def segment_by_concept(
+    def segment(
         self,
         image: Image.Image,
         concept: str = DEFAULT_CONCEPT
     ) -> list[SegmentationResult]:
-        """Segment image using a text concept prompt.
-
-        This is the key feature of SAM3 - find all instances matching a concept
-        like "fursuiter" automatically without manual prompts.
+        """Segment image using SAM3 text prompt.
 
         Args:
             image: PIL Image to process.
-            concept: Text concept to search for (e.g., "fursuiter").
+            concept: Text concept to search for (default: "fursuiter").
 
         Returns:
             List of SegmentationResult objects for each detected instance.
@@ -96,17 +93,6 @@ class FursuitSegmentor:
             verbose=False
         )
         return self._process_results(image, results)
-
-    def segment_fursuits(self, image: Image.Image) -> list[SegmentationResult]:
-        """Convenience method to segment fursuits specifically.
-
-        Args:
-            image: PIL Image to process.
-
-        Returns:
-            List of SegmentationResult objects for each detected fursuit.
-        """
-        return self.segment_by_concept(image, concept=self.DEFAULT_CONCEPT)
 
     def _process_results(
         self,

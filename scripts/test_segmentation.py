@@ -65,9 +65,8 @@ def test_segmentation():
         image = Image.open(filepath)
         print(f"  Size: {image.size}")
 
-        # Test fursuit segmentation with text prompt
-        results = segmentor.segment_fursuits(image)
-        print(f"  Fursuiter segmentation: {len(results)} segments")
+        results = segmentor.segment(image)
+        print(f"  Segmentation: {len(results)} segments")
         for i, r in enumerate(results):
             print(f"    [{i}] bbox={r.bbox}, conf={r.confidence:.2f}, crop_size={r.crop.size}")
 
@@ -122,7 +121,7 @@ def visualize_segmentation(output_dir: str = "/tmp/seg_test"):
         print(f"Processing: {info['nickname']}")
 
         image = Image.open(filepath)
-        results = segmentor.segment_fursuits(image)
+        results = segmentor.segment(image)
 
         # Save original (convert RGBA to RGB for JPEG)
         base_name = info['nickname'].replace(" ", "_").replace("/", "_")[:20]

@@ -72,8 +72,9 @@ results = identifier.identify(image, top_k=5)
 # Add images for a character
 identifier.add_images("CharacterName", ["img1.jpg", "img2.jpg"])
 
-# Segment by concept
-segmentor.segment_by_concept(image, concept="fursuiter")
+# Segment (default concept: "fursuiter")
+segmentor.segment(image)
+segmentor.segment(image, concept="person")  # custom concept
 ```
 
 ## Data Sources

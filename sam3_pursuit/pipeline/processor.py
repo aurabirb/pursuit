@@ -64,8 +64,7 @@ class ProcessingPipeline:
         Returns:
             List of ProcessingResult objects, one per detected fursuit.
         """
-        # Use fursuit-specific segmentation (SAM3 text prompt or SAM2 fallback)
-        segmentations = self.segmentor.segment_by_concept(image, concept=concept)
+        segmentations = self.segmentor.segment(image, concept=concept)
 
         results = []
         for seg in segmentations:

@@ -25,7 +25,7 @@ Image → SAM3 (detect "fursuiter") → DINOv2 (768D embedding) → FAISS (simil
 ### 1. Clone and setup environment
 
 ```bash
-git clone https://github.com/youruser/pursuit.git
+git clone https://github.com/aurabirb/pursuit.git
 cd pursuit
 
 # Create virtual environment
@@ -42,12 +42,13 @@ SAM3 requires HuggingFace authentication:
 
 1. Create account at https://huggingface.co
 2. Request access at https://huggingface.co/facebook/sam3
-3. Wait for approval (usually 1-2 days)
-4. Login locally:
+3. Wait for approval (usually hours)
+4. Create a token at https://huggingface.co/settings/tokens
+5. Login locally:
 
 ```bash
 pip install huggingface_hub
-huggingface-cli login
+hf auth login
 ```
 
 ### 3. Download SAM3 model (~3.5GB)

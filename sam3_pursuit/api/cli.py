@@ -419,29 +419,18 @@ def ingest_from_nfc25(identifier, args):
         sys.exit(1)
 
     with open(json_path) as f:
-        fursuit_list = json.load(f)
+        fursuit_list = json.load(f)['FursuitList']
 
     print(f"Found {len(fursuit_list)} fursuits in NFC25 dataset")
 
     total_added = 0
 
     for fursuit in fursuit_list:
-        char_name = fursuit.get("name", "Unknown")
-        uuid = fursuit.get("uuid")
-
-        if not uuid:
-            continue
-
-        # Try different image extensions
-        img_path = None
-        for ext in [".png", ".jpg", ".jpeg"]:
-            candidate = images_dir / f"{uuid}{ext}"
-            if candidate.exists():
-                img_path = candidate
-                break
-
-        if img_path is None:
-            continue
+        char_name = fursuit.get("NickName", "")
+        img_filename = str(fursuit.get("ImageUrl")).split("/")[-1]
+        img_path = images_dir / img_filename
+        if not img_path.exists():
+            print(f'Warning: {img_path} does not exist, skipping.')
 
         added = identifier.add_images(
             character_name=char_name,

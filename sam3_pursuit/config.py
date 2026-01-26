@@ -34,6 +34,10 @@ class Config:
     DEFAULT_BACKGROUND_COLOR = (128, 128, 128)
     DEFAULT_BLUR_RADIUS = 25
 
+    # Image processing
+    PATCH_SIZE = 14
+    TARGET_IMAGE_SIZE = 630
+
     # Search
     DEFAULT_TOP_K = 5
     HNSW_M = 32

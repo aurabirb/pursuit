@@ -58,6 +58,8 @@ class TestDatabase(unittest.TestCase):
 
         self.db.add_detection(detection)
         retrieved = self.db.get_detection_by_embedding_id(42)
+        if retrieved is None:
+            self.fail("Failed to retrieve detection by embedding ID")
 
         self.assertIsNotNone(retrieved)
         self.assertEqual(retrieved.post_id, "12345")
@@ -196,14 +198,16 @@ class TestIdentification(unittest.TestCase):
         image = Image.open(self.BLAZI_IMAGES[0])
 
         # Use segmentation since test images are full photos
-        results = self.identifier.identify(image, top_k=10, use_segmentation=True)
+        results = self.identifier.identify(image, top_k=10)
 
         self.assertGreater(len(results), 0, "Should return at least one result")
 
         # Print results for debugging
         print(f"\nResults for {os.path.basename(self.BLAZI_IMAGES[0])}:")
-        for i, r in enumerate(results[:5]):
-            print(f"  {i+1}. {r.character_name}: {r.confidence:.2%}")
+        for r in results:
+            print(f"\n========\nSegment with {len(r.matches)} matches:")
+            for i, m in enumerate(r.matches):
+                print(f"  {i+1}. {m.character_name}: {m.confidence:.2%}")
 
     def test_segmentation_detects_multiple_fursuiters(self):
         """Test that segmentation finds multiple fursuiters in 3furs.jpg."""
@@ -212,7 +216,7 @@ class TestIdentification(unittest.TestCase):
         image = Image.open(self.MULTI_FUR_IMAGE)
         segmentor = FursuitSegmentor()
 
-        results = segmentor.segment(image, concept="fursuiter")
+        results = segmentor.segment(image)
 
         print(f"\nSegmentation found {len(results)} fursuiter(s) in 3furs.jpg")
         for i, r in enumerate(results):
@@ -235,7 +239,7 @@ class TestIdentification(unittest.TestCase):
         image = Image.open(self.MULTI_FUR_IMAGE)
 
         # Use segmentation to detect multiple characters
-        results = self.identifier.identify(image, top_k=15, use_segmentation=True)
+        results = self.identifier.identify(image, top_k=15)
 
         self.assertGreater(len(results), 0, "Should detect at least one character")
 
@@ -243,9 +247,11 @@ class TestIdentification(unittest.TestCase):
         print(f"\nIdentification results for 3furs.jpg:")
         seen = set()
         for r in results:
-            if r.character_name and r.character_name not in seen:
-                print(f"  {r.character_name}: {r.confidence:.2%}")
-                seen.add(r.character_name)
+            print(f"\n========\nSegment with {len(r.matches)} matches:")
+            for m in r.matches:
+                if m.character_name and m.character_name not in seen:
+                    print(f"  {m.character_name}: {m.confidence:.2%}")
+                    seen.add(m.character_name)
 
     def test_add_and_identify_character(self):
         """Test adding images then identifying - the core use case."""
@@ -261,20 +267,18 @@ class TestIdentification(unittest.TestCase):
             # Add first two Blazi images
             added = identifier.add_images(
                 character_names=["Blazi", "Blazi"],
-                image_paths=self.BLAZI_IMAGES[:2],
-                use_segmentation=True,
-                concept="fursuiter",
+                image_paths=self.BLAZI_IMAGES[:2]
             )
             self.assertGreater(added, 0, "Should add at least one embedding")
 
             # Now identify using the third image
             image = Image.open(self.BLAZI_IMAGES[2])
-            results = identifier.identify(image, top_k=5, use_segmentation=True)
+            results = identifier.identify(image, top_k=5)
 
             self.assertGreater(len(results), 0, "Should return results")
 
             # Blazi should be the top result since we just added them
-            top_name = results[0].character_name
+            top_name = results[0].matches[0].character_name or ""
             self.assertEqual(
                 top_name.lower(), "blazi",
                 f"Blazi should be top result, got: {top_name}"

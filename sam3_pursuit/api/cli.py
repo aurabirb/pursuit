@@ -19,13 +19,11 @@ Examples:
   pursuit identify photo.jpg
 
   # Identify with segmentation (for multi-character images)
-  pursuit identify photo.jpg --segment
+  pursuit identify photo.jpg
+  pursuit identify photo.jpg --no-segment
 
   # Add images for a character
   pursuit add --character "CharacterName" image1.jpg image2.jpg
-
-  # Test segmentation on an image
-  pursuit segment photo.jpg --output-dir ./crops/
 
   # View database entries for a character
   pursuit show --by-character "CharacterName"
@@ -60,12 +58,6 @@ Examples:
     add_parser.add_argument("--character", "-c", required=True, help="Character name")
     add_parser.add_argument("images", nargs="+", help="Image paths")
     add_parser.add_argument("--save-crops", action="store_true", help="Save crop images for debugging")
-    add_parser.add_argument("--workers", "-j", type=int, default=4, help="Parallel image loading threads (default: 4)")
-
-    segment_parser = subparsers.add_parser("segment", help="Test segmentation on an image")
-    segment_parser.add_argument("image", help="Path to image file")
-    segment_parser.add_argument("--output-dir", "-o", help="Save crops to directory")
-    segment_parser.add_argument("--json", action="store_true", help="Output as JSON")
 
     show_parser = subparsers.add_parser("show", help="View database entries")
     show_parser.add_argument("--by-id", type=int, help="Query by detection ID")
@@ -79,7 +71,6 @@ Examples:
     ingest_parser.add_argument("--data-dir", required=True, help="Data directory")
     ingest_parser.add_argument("--limit", type=int, help="Limit number of images per character")
     ingest_parser.add_argument("--batch-size", type=int, default=16, help="Batch size")
-    ingest_parser.add_argument("--workers", "-j", type=int, default=4, help="Parallel image loading threads (default: 4)")
     ingest_parser.add_argument("--save-crops", action="store_true", help="Save crop images")
 
     stats_parser = subparsers.add_parser("stats", help="Show system statistics")
@@ -95,8 +86,6 @@ Examples:
         identify_command(args)
     elif args.command == "add":
         add_command(args)
-    elif args.command == "segment":
-        segment_command(args)
     elif args.command == "show":
         show_command(args)
     elif args.command == "ingest":
@@ -132,13 +121,19 @@ def _get_identifier(args):
     db_path = args.db if hasattr(args, "db") and args.db else Config.DB_PATH
     index_path = args.index if hasattr(args, "index") and args.index else Config.INDEX_PATH
     isolation_config = _get_isolation_config(args)
+    segmentor_model_name = Config.SAM3_MODEL if getattr(args, "segment", True) else None
+    segmentor_concept = args.concept if hasattr(args, "concept") and args.concept else Config.DEFAULT_CONCEPT
 
-    return SAM3FursuitIdentifier(db_path=db_path, index_path=index_path, isolation_config=isolation_config)
+    return SAM3FursuitIdentifier(
+        db_path=db_path,
+        index_path=index_path,
+        isolation_config=isolation_config,
+        segmentor_model_name=segmentor_model_name,
+        segmentor_concept=segmentor_concept)
 
 
 def identify_command(args):
     """Handle identify command."""
-    from sam3_pursuit.api.identifier import SegmentResults
 
     image_path = Path(args.image)
 
@@ -153,7 +148,6 @@ def identify_command(args):
     results = identifier.identify(
         image,
         top_k=args.top_k,
-        use_segmentation=args.segment,
         save_crops=save_crops,
         crop_prefix=crop_prefix,
     )
@@ -162,38 +156,24 @@ def identify_command(args):
         print("No matches found.")
         return
 
-    # Check if results are per-segment (segmentation mode) or flat list
-    if args.segment and results and isinstance(results[0], SegmentResults):
-        # Per-segment results
-        print(f"\nAnalyzed {len(results)} segment(s) in {image_path.name}")
-        print("=" * 60)
+    print(f"\nAnalyzed {len(results)} segment(s) in {image_path.name}")
+    print("=" * 60)
 
-        for seg_result in results:
-            print(f"\nSegment {seg_result.segment_index + 1}")
-            print(f"  BBox: {seg_result.segment_bbox}")
-            print(f"  Detection confidence: {seg_result.segment_confidence:.2%}")
-            print("-" * 60)
-
-            if not seg_result.matches:
-                print("  No matches found for this segment.")
-            else:
-                print(f"  Top {len(seg_result.matches)} matches:")
-                for i, match in enumerate(seg_result.matches, 1):
-                    print(f"  {i}. {match.character_name or 'Unknown'}")
-                    print(f"     Confidence: {match.confidence:.2%}")
-                    print(f"     Distance: {match.distance:.4f}")
-                    print(f"     Post ID: {match.post_id}")
-    else:
-        # Flat results (no segmentation)
-        print(f"\nTop {len(results)} matches for {image_path.name}:")
+    for seg_result in results:
+        print(f"\nSegment {seg_result.segment_index + 1}")
+        print(f"  BBox: {seg_result.segment_bbox}")
+        print(f"  Detection confidence: {seg_result.segment_confidence:.2%}")
         print("-" * 60)
 
-        for i, result in enumerate(results, 1):
-            print(f"{i}. {result.character_name or 'Unknown'}")
-            print(f"   Confidence: {result.confidence:.2%}")
-            print(f"   Distance: {result.distance:.4f}")
-            print(f"   Post ID: {result.post_id}")
-            print()
+        if not seg_result.matches:
+            print("  No matches found for this segment.")
+        else:
+            print(f"  Top {len(seg_result.matches)} matches:")
+            for i, match in enumerate(seg_result.matches, 1):
+                print(f"  {i}. {match.character_name or 'Unknown'}")
+                print(f"     Confidence: {match.confidence:.2%}")
+                print(f"     Distance: {match.distance:.4f}")
+                print(f"     Post ID: {match.post_id}")
 
 
 def add_command(args):
@@ -209,76 +189,19 @@ def add_command(args):
     if not valid_paths:
         print("Error: No valid images provided.")
         sys.exit(1)
+    
+    if not args.character:
+        print("Error: Character name is required.")
+        sys.exit(1)
 
     identifier = _get_identifier(args)
-    num_workers = args.workers if hasattr(args, "workers") else 4
     added = identifier.add_images(
         character_names=[args.character] * len(valid_paths),
         image_paths=valid_paths,
-        use_segmentation=args.segment,
-        concept=args.concept,
-        save_crops=args.save_crops,
-        num_workers=num_workers,
+        save_crops=args.save_crops
     )
 
     print(f"\nAdded {added} images for character '{args.character}'")
-
-
-def segment_command(args):
-    """Handle segment command - test segmentation on an image."""
-    from sam3_pursuit.models.segmentor import FursuitSegmentor
-    from sam3_pursuit.models.preprocessor import BackgroundIsolator
-
-    image_path = Path(args.image)
-
-    if not image_path.exists():
-        print(f"Error: Image not found: {image_path}")
-        sys.exit(1)
-
-    segmentor = FursuitSegmentor()
-    isolation_config = _get_isolation_config(args)
-    isolator = BackgroundIsolator(isolation_config)
-    image = Image.open(image_path)
-
-    results = segmentor.segment(image, concept=args.concept)
-
-    if args.json:
-        output = {
-            "image": str(image_path),
-            "concept": args.concept,
-            "background_mode": isolation_config.mode,
-            "segments": [
-                {
-                    "index": i,
-                    "bbox": list(r.bbox),
-                    "confidence": r.confidence,
-                    "crop_size": list(r.crop.size),
-                }
-                for i, r in enumerate(results)
-            ]
-        }
-        print(json.dumps(output, indent=2))
-    else:
-        print(f"\nSegmentation results for {image_path}")
-        print(f"Concept: {args.concept}")
-        print(f"Background: {isolation_config.mode}")
-        print(f"Found {len(results)} segment(s):\n")
-
-        for i, r in enumerate(results):
-            print(f"  [{i}] bbox={r.bbox}, confidence={r.confidence:.2%}, size={r.crop.size}")
-
-    if args.output_dir:
-        output_dir = Path(args.output_dir)
-        output_dir.mkdir(parents=True, exist_ok=True)
-        base_name = image_path.stem
-
-        for i, r in enumerate(results):
-            # Apply background isolation before saving
-            isolated_crop = isolator.isolate(r.crop, r.crop_mask)
-            crop_path = output_dir / f"{base_name}_crop_{i}.jpg"
-            isolated_crop.convert("RGB").save(crop_path, quality=90)
-            print(f"Saved: {crop_path}")
-
 
 def show_command(args):
     """Handle show command - view database entries."""
@@ -351,18 +274,19 @@ def show_command(args):
 
 def ingest_command(args):
     """Handle ingest command - bulk import images."""
-    identifier = _get_identifier(args)
 
     if args.source == "directory":
-        ingest_from_directory(identifier, args)
+        ingest_from_directory(args)
     elif args.source == "furtrack":
-        ingest_from_furtrack(identifier, args)
+        ingest_from_furtrack(args)
     elif args.source == "nfc25":
-        ingest_from_nfc25(identifier, args)
+        ingest_from_nfc25(args)
 
 
-def ingest_from_directory(identifier, args):
+def ingest_from_directory(args):
     """Ingest images from directory structure: data_dir/character_name/*.jpg"""
+    
+    identifier = _get_identifier(args)
     data_dir = Path(args.data_dir)
 
     if not data_dir.exists():
@@ -386,20 +310,18 @@ def ingest_from_directory(identifier, args):
             added = identifier.add_images(
                 character_names=[character_name] * len(images),
                 image_paths=[str(p) for p in images],
-                batch_size=args.batch_size,
-                use_segmentation=args.segment,
-                concept=args.concept,
                 save_crops=args.save_crops,
-                num_workers=args.workers,
             )
             total_added += added
 
     print(f"\nTotal: Added {total_added} images")
 
 
-def ingest_from_furtrack(identifier, args):
+def ingest_from_furtrack(args):
     """Ingest images from FurTrack download database."""
     import sqlite3
+
+    identifier = _get_identifier(args)
 
     data_dir = Path(args.data_dir)
     furtrack_db = data_dir / "furtrack.db"
@@ -416,6 +338,8 @@ def ingest_from_furtrack(identifier, args):
     conn = sqlite3.connect(furtrack_db)
     c = conn.cursor()
 
+    # TODO: only select entries with single character?
+
     c.execute("""
         SELECT post_id, char, url
         FROM furtrack
@@ -430,7 +354,7 @@ def ingest_from_furtrack(identifier, args):
     # Group by character
     character_images: dict[str, list[str]] = {}
 
-    for post_id, char_name, url in records:
+    for post_id, char_name, url in records: # TODO: record source_url in add_image
         img_path = images_dir / f"{post_id}.jpg"
         if not img_path.exists():
             continue
@@ -449,19 +373,17 @@ def ingest_from_furtrack(identifier, args):
         added = identifier.add_images(
             character_names=[char_name] * len(img_paths),
             image_paths=img_paths,
-            batch_size=args.batch_size,
-            use_segmentation=args.segment,
-            concept=args.concept,
             save_crops=args.save_crops,
-            num_workers=args.workers,
         )
         total_added += added
 
     print(f"\nTotal: Added {total_added} images")
 
 
-def ingest_from_nfc25(identifier, args):
+def ingest_from_nfc25(args):
     """Ingest images from NFC25 dataset."""
+    identifier = _get_identifier(args)
+
     data_dir = Path(args.data_dir)
     json_path = data_dir / "nfc25-fursuit-list.json"
     images_dir = data_dir / "fursuit_images"
@@ -493,11 +415,8 @@ def ingest_from_nfc25(identifier, args):
     added = identifier.add_images(
         character_names=char_names,
         image_paths=img_paths,
-        batch_size=args.batch_size,
-        use_segmentation=args.segment,
-        concept=args.concept,
         save_crops=args.save_crops,
-        num_workers=args.workers,
+        source_url=str(fursuit.get("ImageUrl")),
     )
     total_added += added
 

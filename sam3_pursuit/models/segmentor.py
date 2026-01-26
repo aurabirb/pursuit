@@ -14,25 +14,43 @@ class SegmentationResult:
     crop_mask: np.ndarray
     bbox: tuple[int, int, int, int]
     confidence: float
+    segmentor: str = "unknown"
 
+class FullImageSegmentor:
+    """A fallback segmentor that returns the full image as a single segment."""
+    def __init__(self) -> None:
+        self.model_name = "full"
+
+    def segment(self, image: Image.Image) -> list[SegmentationResult]:
+        w, h = image.size
+        full_mask = np.ones((h, w), dtype=np.uint8)
+        return [SegmentationResult(
+            crop=image.copy(),
+            mask=full_mask,
+            crop_mask=full_mask,
+            bbox=(0, 0, w, h),
+            confidence=1.0,
+            segmentor=self.model_name,
+        )]
 
 class FursuitSegmentor:
-    DEFAULT_CONCEPT = "fursuiter"
 
     def __init__(
         self,
         device: Optional[str] = None,
         model_name: Optional[str] = None,
         confidence_threshold: float = Config.DETECTION_CONFIDENCE,
-        max_detections: int = Config.MAX_DETECTIONS
+        max_detections: int = Config.MAX_DETECTIONS,
+        concept: Optional[str] = Config.DEFAULT_CONCEPT,
     ):
         self.device = device or Config.get_device()
         self.confidence_threshold = confidence_threshold
         self.max_detections = max_detections
         self.model_name = model_name or Config.SAM3_MODEL
+        self.concept = concept or Config.DEFAULT_CONCEPT
         self.predictor = self._load_model()
 
-    def _load_model(self):
+    def _load_model(self, save=False):
         from ultralytics.models.sam.predict import SAM3SemanticPredictor
 
         overrides = dict(
@@ -43,14 +61,14 @@ class FursuitSegmentor:
             device=self.device,
             imgsz=644,
             verbose=False,
-            save=False,
+            save=save,
         )
         return SAM3SemanticPredictor(overrides=overrides)
 
-    def segment(self, image: Image.Image, concept: str = DEFAULT_CONCEPT) -> list[SegmentationResult]:
+    def segment(self, image: Image.Image) -> list[SegmentationResult]:
         image_np = np.array(image.convert("RGB"))
         self.predictor.set_image(image_np)
-        results = self.predictor(text=[concept])
+        results = self.predictor(text=self.concept.split(","))
         return self._process_results(image, results)
 
     def _process_results(self, image: Image.Image, results) -> list[SegmentationResult]:
@@ -85,20 +103,14 @@ class FursuitSegmentor:
                     mask=mask.astype(np.uint8),
                     crop_mask=crop_mask,
                     bbox=bbox,
-                    confidence=confidence
+                    confidence=confidence,
+                    segmentor=self.model_name,
                 ))
 
         if not segmentation_results:
             print(f"Warning: No segments found, using full image as fallback")
-            w, h = image.size
-            full_mask = np.ones((h, w), dtype=np.uint8)
-            segmentation_results.append(SegmentationResult(
-                crop=image.copy(),
-                mask=full_mask,
-                crop_mask=full_mask,
-                bbox=(0, 0, w, h),
-                confidence=1.0
-            ))
+            segmentor = FullImageSegmentor()
+            segmentation_results = segmentor.segment(image)
 
         return segmentation_results
 

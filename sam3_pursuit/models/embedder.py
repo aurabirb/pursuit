@@ -19,7 +19,7 @@ class FursuitEmbedder:
 
         print(f"Loading DINOv2: {model_name} on {self.device}")
         self.processor = AutoImageProcessor.from_pretrained(model_name, use_fast=True)
-        self.model = AutoModel.from_pretrained(model_name, use_fast=True).to(self.device)
+        self.model = AutoModel.from_pretrained(model_name).to(self.device)
         self.model.eval()
         self.embedding_dim = self.model.config.hidden_size
         print(f"DINOv2 loaded. Dim: {self.embedding_dim}")

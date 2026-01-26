@@ -1,7 +1,5 @@
-"""Main API for fursuit character identification."""
-
 import os
-from concurrent.futures import ThreadPoolExecutor, as_completed
+from concurrent.futures import ThreadPoolExecutor
 from dataclasses import dataclass
 from io import BytesIO
 from pathlib import Path
@@ -30,7 +28,6 @@ class IdentificationResult:
 
 @dataclass
 class SegmentResults:
-    """Results for a single detected segment."""
     segment_index: int
     segment_bbox: tuple[int, int, int, int]
     segment_confidence: float
@@ -38,8 +35,6 @@ class SegmentResults:
 
 
 class SAM3FursuitIdentifier:
-    """Main API for fursuit character identification."""
-
     def __init__(
         self,
         db_path: str = Config.DB_PATH,
@@ -48,38 +43,20 @@ class SAM3FursuitIdentifier:
         isolation_config: Optional[IsolationConfig] = None
     ):
         self.device = device or Config.get_device()
-        print(f"Initializing SAM3FursuitIdentifier on {self.device}")
-
         self.db = Database(db_path)
         self.index = VectorIndex(index_path)
         self.pipeline = ProcessingPipeline(device=self.device, isolation_config=isolation_config)
 
-        print(f"Identifier ready. Index: {self.index.size} embeddings")
-
     def _build_preprocessing_info(self) -> str:
-        """Build compact preprocessing metadata string.
-
-        Format: pipe-separated key:value pairs
-        Keys: bg (background mode), bgc (color hex), br (blur radius),
-              emb (embedder), idx (index type)
-        """
         parts = []
         iso = self.pipeline.isolation_config
-
-        # Background mode: s=solid, b=blur, n=none
         mode_map = {"solid": "s", "blur": "b", "none": "n"}
         parts.append(f"bg:{mode_map.get(iso.mode, 'n')}")
-
-        # Background color (only for solid mode, as hex without #)
         if iso.mode == "solid":
             r, g, b = iso.background_color
             parts.append(f"bgc:{r:02x}{g:02x}{b:02x}")
-
-        # Blur radius (only for blur mode)
         if iso.mode == "blur":
             parts.append(f"br:{iso.blur_radius}")
-
-        # Embedder model (shortened)
         emb = self.pipeline.embedder_model_name
         if "dinov2-base" in emb:
             emb = "dv2b"
@@ -88,12 +65,9 @@ class SAM3FursuitIdentifier:
         elif "dinov2-giant" in emb:
             emb = "dv2g"
         else:
-            emb = emb.split("/")[-1][:8]  # Last part, max 8 chars
+            emb = emb.split("/")[-1][:8]
         parts.append(f"emb:{emb}")
-
-        # Index type
         parts.append(f"idx:{self.index.index_type}")
-
         return "|".join(parts)
 
     def identify(
@@ -104,21 +78,7 @@ class SAM3FursuitIdentifier:
         save_crops: bool = False,
         crop_prefix: str = "query",
     ) -> list[IdentificationResult] | list[SegmentResults]:
-        """Identify fursuit character(s) in an image.
-
-        Args:
-            image: Input image
-            top_k: Number of results to return per segment
-            use_segmentation: Whether to use SAM3 segmentation
-            save_crops: Whether to save preprocessed crops for debugging
-            crop_prefix: Prefix for saved crop filenames
-
-        Returns:
-            When use_segmentation=False: List of IdentificationResult
-            When use_segmentation=True: List of SegmentResults (one per segment)
-        """
         if self.index.size == 0:
-            print("Warning: Index is empty")
             return []
 
         if use_segmentation:
@@ -136,7 +96,6 @@ class SAM3FursuitIdentifier:
                 ))
             return segment_results
         else:
-            # For non-segmented, save the resized input that goes to embedder
             if save_crops:
                 from sam3_pursuit.models.embedder import _resize_to_patch_multiple
                 resized = _resize_to_patch_multiple(image.convert("RGB"))
@@ -145,34 +104,21 @@ class SAM3FursuitIdentifier:
             return self._search_embedding(embedding, top_k)
 
     def _save_debug_crop(self, image: Image.Image, name: str, search: bool = True):
-        """Save a debug crop image.
-
-        Args:
-            image: Image to save
-            name: Filename (without extension)
-            search: If True, save to search dir; if False, save to ingest dir
-        """
         crops_dir = Path(Config.CROPS_SEARCH_DIR if search else Config.CROPS_INGEST_DIR)
         crops_dir.mkdir(parents=True, exist_ok=True)
         path = crops_dir / f"{name}.jpg"
         image.convert("RGB").save(path, quality=90)
-        print(f"Saved crop: {path}")
 
     def _search_embedding(self, embedding: np.ndarray, top_k: int) -> list[IdentificationResult]:
         distances, indices = self.index.search(embedding, top_k * 2)
-
         results = []
         for distance, idx in zip(distances[0], indices[0]):
             if idx == -1:
                 continue
-
             detection = self.db.get_detection_by_embedding_id(int(idx))
             if detection is None:
                 continue
-
-            # Distance to confidence: [0, 2] -> [1, 0]
             confidence = max(0.0, 1.0 - distance / 2.0)
-
             results.append(IdentificationResult(
                 character_name=detection.character_name,
                 confidence=confidence,
@@ -182,7 +128,6 @@ class SAM3FursuitIdentifier:
                       detection.bbox_width, detection.bbox_height),
                 segmentor_model=detection.segmentor_model
             ))
-
         results.sort(key=lambda x: x.confidence, reverse=True)
         return results[:top_k]
 
@@ -197,38 +142,19 @@ class SAM3FursuitIdentifier:
         source_url: Optional[str] = None,
         num_workers: int = 4,
     ) -> int:
-        """Add images for characters to the index.
-
-        Args:
-            character_names: List of character names for each image
-            image_paths: List of image paths
-            batch_size: Batch size for embedding (used when use_segmentation=False)
-            use_segmentation: Whether to use SAM3 segmentation
-            concept: SAM3 concept for segmentation
-            save_crops: Whether to save crop images
-            source_url: Optional source URL
-            num_workers: Number of threads for parallel image loading
-
-        Returns:
-            Number of embeddings added
-        """
         assert len(character_names) == len(image_paths)
-
         if use_segmentation:
             return self._add_images_with_segmentation(
                 character_names, image_paths, concept, save_crops, source_url, num_workers
             )
-        else:
-            return self._add_images_batched(
-                character_names, image_paths, batch_size, save_crops, source_url, num_workers
-            )
+        return self._add_images_batched(
+            character_names, image_paths, batch_size, save_crops, source_url, num_workers
+        )
 
     def _load_image_task(self, args: tuple) -> tuple:
-        """Load a single image (for thread pool). Returns (index, image, error)."""
         idx, img_path = args
         try:
-            image = self._load_image(img_path)
-            return (idx, image, None)
+            return (idx, self._load_image(img_path), None)
         except Exception as e:
             return (idx, None, str(e))
 
@@ -241,51 +167,35 @@ class SAM3FursuitIdentifier:
         source_url: Optional[str],
         num_workers: int,
     ) -> int:
-        """Add images with segmentation (parallel loading, sequential processing)."""
         from sam3_pursuit.storage.database import get_git_version
 
         added_count = 0
         preprocessing_info = self._build_preprocessing_info()
         git_version = get_git_version()
 
-        # Filter out images already processed with current git version
         post_ids = [self._extract_post_id(p) for p in image_paths]
         posts_to_process = self.db.get_posts_needing_update(post_ids, git_version)
-
-        # Build filtered lists
         filtered_indices = [i for i, pid in enumerate(post_ids) if pid in posts_to_process]
         if not filtered_indices:
-            print("All images already processed with current git version")
             return 0
 
-        skipped = len(image_paths) - len(filtered_indices)
-        if skipped > 0:
-            print(f"Skipping {skipped} images already processed with git version {git_version}")
-
         total = len(filtered_indices)
-
-        # Process in chunks to limit memory usage
         chunk_size = num_workers * 2
 
         for chunk_start in range(0, total, chunk_size):
             chunk_end = min(chunk_start + chunk_size, total)
             chunk_indices = filtered_indices[chunk_start:chunk_end]
 
-            # Parallel load images in this chunk
             loaded = {}
             with ThreadPoolExecutor(max_workers=num_workers) as executor:
                 tasks = [(i, image_paths[i]) for i in chunk_indices]
                 for idx, image, error in executor.map(self._load_image_task, tasks):
-                    if error:
-                        print(f"Error loading {image_paths[idx]}: {error}")
-                    else:
+                    if not error:
                         loaded[idx] = image
 
-            # Process loaded images sequentially (GPU operations)
             for idx in chunk_indices:
                 if idx not in loaded:
                     continue
-
                 image = loaded[idx]
                 character_name = character_names[idx]
                 img_path = image_paths[idx]
@@ -310,8 +220,6 @@ class SAM3FursuitIdentifier:
                         crop_image=crop_to_save,
                     )
                     added_count += 1
-
-                # Free memory
                 del loaded[idx]
 
             print(f"Processed {min(chunk_end, total)}/{total} images, {added_count} embeddings")
@@ -328,26 +236,17 @@ class SAM3FursuitIdentifier:
         source_url: Optional[str],
         num_workers: int,
     ) -> int:
-        """Add images without segmentation (batched embedding)."""
         from sam3_pursuit.storage.database import get_git_version
 
         added_count = 0
         preprocessing_info = self._build_preprocessing_info()
         git_version = get_git_version()
 
-        # Filter out images already processed with current git version
         post_ids = [self._extract_post_id(p) for p in image_paths]
         posts_to_process = self.db.get_posts_needing_update(post_ids, git_version)
-
-        # Build filtered list of indices
         filtered_indices = [i for i, pid in enumerate(post_ids) if pid in posts_to_process]
         if not filtered_indices:
-            print("All images already processed with current git version")
             return 0
-
-        skipped = len(image_paths) - len(filtered_indices)
-        if skipped > 0:
-            print(f"Skipping {skipped} images already processed with git version {git_version}")
 
         total = len(filtered_indices)
 
@@ -355,27 +254,20 @@ class SAM3FursuitIdentifier:
             batch_end = min(batch_start + batch_size, total)
             batch_indices = filtered_indices[batch_start:batch_end]
 
-            # Parallel load images
             loaded = {}
             with ThreadPoolExecutor(max_workers=num_workers) as executor:
                 tasks = [(i, image_paths[i]) for i in batch_indices]
                 for idx, image, error in executor.map(self._load_image_task, tasks):
-                    if error:
-                        print(f"Error loading {image_paths[idx]}: {error}")
-                    else:
+                    if not error:
                         loaded[idx] = image
 
-            # Collect valid images for batched embedding
             valid_indices = [i for i in batch_indices if i in loaded]
             if not valid_indices:
                 continue
 
             images = [loaded[i] for i in valid_indices]
-
-            # Batch embed
             embeddings = self.pipeline.embed_batch(images)
 
-            # Add to index
             for i, idx in enumerate(valid_indices):
                 image = loaded[idx]
                 character_name = character_names[idx]
@@ -419,7 +311,6 @@ class SAM3FursuitIdentifier:
         crop_image: Optional[Image.Image] = None,
     ):
         embedding_id = self.index.add(embedding.reshape(1, -1))
-
         if segmentor_model is None:
             segmentor_model = self.pipeline.segmentor_model_name
 
@@ -449,7 +340,6 @@ class SAM3FursuitIdentifier:
             crop_path=crop_path,
         )
         self.db.add_detection(detection)
-        print(f'Saved {character_name} at {bbox} confidence {confidence}')
 
     def _load_image(self, img_path: str) -> Image.Image:
         if img_path.startswith(('http://', 'https://')):

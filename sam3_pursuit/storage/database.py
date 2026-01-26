@@ -1,5 +1,3 @@
-"""SQLite storage for fursuit detection metadata."""
-
 import sqlite3
 import subprocess
 from dataclasses import dataclass
@@ -12,7 +10,6 @@ from sam3_pursuit.config import Config
 
 @lru_cache(maxsize=1)
 def get_git_version() -> str:
-    """Get short git commit hash, cached for the session."""
     try:
         result = subprocess.run(
             ["git", "rev-parse", "--short", "HEAD"],
@@ -51,8 +48,6 @@ class Detection:
 
 
 class Database:
-    """SQLite database for detection metadata."""
-
     _SELECT_FIELDS = """
         id, post_id, character_name, embedding_id, bbox_x, bbox_y,
         bbox_width, bbox_height, confidence, segmentor_model, created_at,
@@ -263,7 +258,6 @@ class Database:
         return exists
 
     def has_post_with_version(self, post_id: str, git_version: Optional[str] = None) -> bool:
-        """Check if post exists with the specified git version (or current if not specified)."""
         if git_version is None:
             git_version = get_git_version()
         conn = sqlite3.connect(self.db_path)
@@ -277,7 +271,6 @@ class Database:
         return exists
 
     def get_posts_needing_update(self, post_ids: list[str], git_version: Optional[str] = None) -> set[str]:
-        """Return post_ids that don't exist or have a different git version."""
         if git_version is None:
             git_version = get_git_version()
         if not post_ids:

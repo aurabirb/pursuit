@@ -1,5 +1,3 @@
-"""SAM3-based fursuit segmentation using text prompts."""
-
 from dataclasses import dataclass
 from typing import Optional
 
@@ -13,14 +11,12 @@ from sam3_pursuit.config import Config
 class SegmentationResult:
     crop: Image.Image
     mask: np.ndarray
-    crop_mask: np.ndarray  # mask cropped to bbox, same size as crop
-    bbox: tuple[int, int, int, int]  # (x, y, width, height)
+    crop_mask: np.ndarray
+    bbox: tuple[int, int, int, int]
     confidence: float
 
 
 class FursuitSegmentor:
-    """SAM3 segmentation using text prompts like "fursuiter"."""
-
     DEFAULT_CONCEPT = "fursuiter"
 
     def __init__(
@@ -39,24 +35,18 @@ class FursuitSegmentor:
     def _load_model(self):
         from ultralytics.models.sam.predict import SAM3SemanticPredictor
 
-        model_path = f"{self.model_name}.pt"
-        print(f"Loading SAM3 model: {model_path} on {self.device}")
-
         overrides = dict(
             conf=self.confidence_threshold,
             task="segment",
             mode="predict",
-            model=model_path,
+            model=f"{self.model_name}.pt",
             device=self.device,
-            imgsz=644,  # Must be multiple of stride 14 (644 = 14 * 46)
+            imgsz=644,
             verbose=False,
         )
-        predictor = SAM3SemanticPredictor(overrides=overrides)
-        print("SAM3 loaded - text prompts enabled")
-        return predictor
+        return SAM3SemanticPredictor(overrides=overrides)
 
     def segment(self, image: Image.Image, concept: str = DEFAULT_CONCEPT) -> list[SegmentationResult]:
-        """Segment image using SAM3 text prompt."""
         image_np = np.array(image.convert("RGB"))
         self.predictor.set_image(image_np)
         results = self.predictor(text=[concept])
@@ -97,7 +87,6 @@ class FursuitSegmentor:
                     confidence=confidence
                 ))
 
-        # Fallback: return full image if no segments found
         if not segmentation_results:
             w, h = image.size
             full_mask = np.ones((h, w), dtype=np.uint8)
@@ -128,6 +117,5 @@ class FursuitSegmentor:
         return image.crop((x, y, x + w, y + h))
 
     def _create_crop_mask(self, mask: np.ndarray, bbox: tuple[int, int, int, int]) -> np.ndarray:
-        """Crop mask to bounding box region."""
         x, y, w, h = bbox
         return mask[y:y + h, x:x + w].astype(np.uint8)

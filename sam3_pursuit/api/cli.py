@@ -1,8 +1,5 @@
-"""Command-line interface for the SAM3 fursuit recognition system."""
-
 import argparse
 import json
-import os
 import sys
 from pathlib import Path
 
@@ -12,7 +9,6 @@ from sam3_pursuit.config import Config
 
 
 def main():
-    """Main CLI entry point."""
     parser = argparse.ArgumentParser(
         prog="pursuit",
         description="Fursuit character recognition using SAM3 and DINOv2",
@@ -55,33 +51,28 @@ Examples:
 
     subparsers = parser.add_subparsers(dest="command", help="Command to run")
 
-    # Identify command
     identify_parser = subparsers.add_parser("identify", help="Identify character in an image")
     identify_parser.add_argument("image", help="Path to image file")
     identify_parser.add_argument("--top-k", "-k", type=int, default=5, help="Number of results")
     identify_parser.add_argument("--save-crops", action="store_true", help="Save preprocessed crops for debugging")
 
-    # Add command
     add_parser = subparsers.add_parser("add", help="Add images for a character")
     add_parser.add_argument("--character", "-c", required=True, help="Character name")
     add_parser.add_argument("images", nargs="+", help="Image paths")
     add_parser.add_argument("--save-crops", action="store_true", help="Save crop images for debugging")
     add_parser.add_argument("--workers", "-j", type=int, default=4, help="Parallel image loading threads (default: 4)")
 
-    # Segment command (NEW)
     segment_parser = subparsers.add_parser("segment", help="Test segmentation on an image")
     segment_parser.add_argument("image", help="Path to image file")
     segment_parser.add_argument("--output-dir", "-o", help="Save crops to directory")
     segment_parser.add_argument("--json", action="store_true", help="Output as JSON")
 
-    # Show command (NEW)
     show_parser = subparsers.add_parser("show", help="View database entries")
     show_parser.add_argument("--by-id", type=int, help="Query by detection ID")
     show_parser.add_argument("--by-character", help="Query by character name")
     show_parser.add_argument("--by-post", help="Query by post ID")
     show_parser.add_argument("--json", action="store_true", help="Output as JSON")
 
-    # Ingest command (NEW)
     ingest_parser = subparsers.add_parser("ingest", help="Bulk ingest images")
     ingest_parser.add_argument("--source", required=True, choices=["directory", "furtrack", "nfc25"],
                                help="Source type")
@@ -91,7 +82,6 @@ Examples:
     ingest_parser.add_argument("--workers", "-j", type=int, default=4, help="Parallel image loading threads (default: 4)")
     ingest_parser.add_argument("--save-crops", action="store_true", help="Save crop images")
 
-    # Stats command
     stats_parser = subparsers.add_parser("stats", help="Show system statistics")
     stats_parser.add_argument("--json", action="store_true", help="Output as JSON")
 
@@ -101,7 +91,6 @@ Examples:
         parser.print_help()
         sys.exit(1)
 
-    # Dispatch to command handlers
     if args.command == "identify":
         identify_command(args)
     elif args.command == "add":
@@ -117,7 +106,6 @@ Examples:
 
 
 def _get_isolation_config(args):
-    """Create IsolationConfig from CLI args."""
     from sam3_pursuit.models.preprocessor import IsolationConfig
 
     bg_color = Config.DEFAULT_BACKGROUND_COLOR
@@ -139,7 +127,6 @@ def _get_isolation_config(args):
 
 
 def _get_identifier(args):
-    """Create identifier with optional custom paths."""
     from sam3_pursuit.api.identifier import SAM3FursuitIdentifier
 
     db_path = args.db if hasattr(args, "db") and args.db else Config.DB_PATH

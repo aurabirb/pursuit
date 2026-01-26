@@ -176,6 +176,7 @@ class SAM3FursuitIdentifier:
 
         post_ids = [self._extract_post_id(p) for p in image_paths]
         posts_to_process = self.db.get_posts_needing_update(post_ids, git_version, preprocessing_info)
+        print(f"Processing {len(posts_to_process)} new/updated posts out of {len(post_ids)} total")
         filtered_indices = [i for i, pid in enumerate(post_ids) if pid in posts_to_process]
         if not filtered_indices:
             return 0

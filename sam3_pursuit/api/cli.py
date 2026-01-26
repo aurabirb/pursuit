@@ -41,6 +41,10 @@ Examples:
   pursuit stats
         """
     )
+    parser.add_argument("--db", default=Config.DB_PATH, help="Database pat")
+    parser.add_argument("--index", default=Config.INDEX_PATH, help="Index pat")
+    parser.add_argument("--no-segment", "-S", dest="segment", action="store_false", help="Do not use segmentation")
+    parser.add_argument("--concept", default=Config.DEFAULT_CONCEPT, help="SAM3 concept")
 
     subparsers = parser.add_subparsers(dest="command", help="Command to run")
 
@@ -48,25 +52,16 @@ Examples:
     identify_parser = subparsers.add_parser("identify", help="Identify character in an image")
     identify_parser.add_argument("image", help="Path to image file")
     identify_parser.add_argument("--top-k", "-k", type=int, default=5, help="Number of results")
-    identify_parser.add_argument("--segment", "-s", action="store_true", help="Use segmentation")
-    identify_parser.add_argument("--concept", default=Config.DEFAULT_CONCEPT, help="SAM3 concept")
-    identify_parser.add_argument("--db", help="Database path")
-    identify_parser.add_argument("--index", help="Index path")
 
     # Add command
     add_parser = subparsers.add_parser("add", help="Add images for a character")
     add_parser.add_argument("--character", "-c", required=True, help="Character name")
     add_parser.add_argument("images", nargs="+", help="Image paths")
-    add_parser.add_argument("--segment", "-s", action="store_true", help="Use segmentation")
-    add_parser.add_argument("--concept", default=Config.DEFAULT_CONCEPT, help="SAM3 concept")
     add_parser.add_argument("--save-crops", action="store_true", help="Save crop images for debugging")
-    add_parser.add_argument("--db", help="Database path")
-    add_parser.add_argument("--index", help="Index path")
 
     # Segment command (NEW)
     segment_parser = subparsers.add_parser("segment", help="Test segmentation on an image")
     segment_parser.add_argument("image", help="Path to image file")
-    segment_parser.add_argument("--concept", default=Config.DEFAULT_CONCEPT, help="SAM3 concept")
     segment_parser.add_argument("--output-dir", "-o", help="Save crops to directory")
     segment_parser.add_argument("--json", action="store_true", help="Output as JSON")
 
@@ -75,7 +70,6 @@ Examples:
     show_parser.add_argument("--by-id", type=int, help="Query by detection ID")
     show_parser.add_argument("--by-character", help="Query by character name")
     show_parser.add_argument("--by-post", help="Query by post ID")
-    show_parser.add_argument("--db", help="Database path")
     show_parser.add_argument("--json", action="store_true", help="Output as JSON")
 
     # Ingest command (NEW)
@@ -83,18 +77,12 @@ Examples:
     ingest_parser.add_argument("--source", required=True, choices=["directory", "furtrack", "nfc25"],
                                help="Source type")
     ingest_parser.add_argument("--data-dir", required=True, help="Data directory")
-    ingest_parser.add_argument("--db", help="Database path")
-    ingest_parser.add_argument("--index", help="Index path")
     ingest_parser.add_argument("--limit", type=int, help="Limit number of images per character")
     ingest_parser.add_argument("--batch-size", type=int, default=16, help="Batch size")
-    ingest_parser.add_argument("--segment", "-s", action="store_true", help="Use segmentation")
-    ingest_parser.add_argument("--concept", default=Config.DEFAULT_CONCEPT, help="SAM3 concept")
     ingest_parser.add_argument("--save-crops", action="store_true", help="Save crop images")
 
     # Stats command
     stats_parser = subparsers.add_parser("stats", help="Show system statistics")
-    stats_parser.add_argument("--db", help="Database path")
-    stats_parser.add_argument("--index", help="Index path")
     stats_parser.add_argument("--json", action="store_true", help="Output as JSON")
 
     args = parser.parse_args()

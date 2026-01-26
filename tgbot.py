@@ -66,11 +66,13 @@ async def photo(update: Update, context: ContextTypes.DEFAULT_TYPE):
             return
 
         # Format response
-        lines = ["Closest characters:"]
+        lines = []
         for i, result in enumerate(results, 1):
-            name = result.character_name or "Unknown"
-            confidence = result.confidence * 100
-            lines.append(f"{i}. {name} ({confidence:.1f}%)")
+            lines.append(f"Characters at segment {i}:")
+            for m in result.matches:
+                name = m.character_name or "Unknown"
+                confidence = m.confidence * 100
+                lines.append(f"{i}. {name} ({confidence:.1f}%)")
 
         msg = "\n".join(lines)
         print(msg)

@@ -15,7 +15,7 @@ from telegram.ext import (
     filters,
 )
 
-from sam3_pursuit import SAM3FursuitIdentifier
+from sam3_pursuit import SAM3FursuitIdentifier, Config
 
 # Global identifier instance (lazy loaded)
 _identifier = None
@@ -25,7 +25,7 @@ def get_identifier() -> SAM3FursuitIdentifier:
     """Get or create the identifier instance."""
     global _identifier
     if _identifier is None:
-        _identifier = SAM3FursuitIdentifier()
+        _identifier = SAM3FursuitIdentifier(segmentor_model_name=Config.SAM3_MODEL, segmentor_concept=Config.DEFAULT_CONCEPT)
     return _identifier
 
 

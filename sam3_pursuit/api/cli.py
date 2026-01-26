@@ -426,7 +426,7 @@ def ingest_from_nfc25(identifier, args):
         character_names=char_names,
         image_paths=img_paths,
         # batch_size=1,
-        use_segmentation=args.segment,
+        use_segmentation=False,
         concept=args.concept,
         save_crops=args.save_crops,
     )

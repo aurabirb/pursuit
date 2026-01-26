@@ -151,6 +151,8 @@ def _get_identifier(args):
 
 def identify_command(args):
     """Handle identify command."""
+    from sam3_pursuit.api.identifier import SegmentResults
+
     image_path = Path(args.image)
 
     if not image_path.exists():
@@ -173,15 +175,38 @@ def identify_command(args):
         print("No matches found.")
         return
 
-    print(f"\nTop {len(results)} matches for {image_path.name}:")
-    print("-" * 60)
+    # Check if results are per-segment (segmentation mode) or flat list
+    if args.segment and results and isinstance(results[0], SegmentResults):
+        # Per-segment results
+        print(f"\nAnalyzed {len(results)} segment(s) in {image_path.name}")
+        print("=" * 60)
 
-    for i, result in enumerate(results, 1):
-        print(f"{i}. {result.character_name or 'Unknown'}")
-        print(f"   Confidence: {result.confidence:.2%}")
-        print(f"   Distance: {result.distance:.4f}")
-        print(f"   Post ID: {result.post_id}")
-        print()
+        for seg_result in results:
+            print(f"\nSegment {seg_result.segment_index + 1}")
+            print(f"  BBox: {seg_result.segment_bbox}")
+            print(f"  Detection confidence: {seg_result.segment_confidence:.2%}")
+            print("-" * 60)
+
+            if not seg_result.matches:
+                print("  No matches found for this segment.")
+            else:
+                print(f"  Top {len(seg_result.matches)} matches:")
+                for i, match in enumerate(seg_result.matches, 1):
+                    print(f"  {i}. {match.character_name or 'Unknown'}")
+                    print(f"     Confidence: {match.confidence:.2%}")
+                    print(f"     Distance: {match.distance:.4f}")
+                    print(f"     Post ID: {match.post_id}")
+    else:
+        # Flat results (no segmentation)
+        print(f"\nTop {len(results)} matches for {image_path.name}:")
+        print("-" * 60)
+
+        for i, result in enumerate(results, 1):
+            print(f"{i}. {result.character_name or 'Unknown'}")
+            print(f"   Confidence: {result.confidence:.2%}")
+            print(f"   Distance: {result.distance:.4f}")
+            print(f"   Post ID: {result.post_id}")
+            print()
 
 
 def add_command(args):

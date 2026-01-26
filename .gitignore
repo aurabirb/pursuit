@@ -20,6 +20,7 @@ datasets/
 furtrack_images/
 embeddings/
 runs/
+pursuit_crops/
 
 # Backups
 *.bak

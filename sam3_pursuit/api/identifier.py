@@ -28,6 +28,15 @@ class IdentificationResult:
     segmentor_model: str = "unknown"
 
 
+@dataclass
+class SegmentResults:
+    """Results for a single detected segment."""
+    segment_index: int
+    segment_bbox: tuple[int, int, int, int]
+    segment_confidence: float
+    matches: list[IdentificationResult]
+
+
 class SAM3FursuitIdentifier:
     """Main API for fursuit character identification."""
 
@@ -94,33 +103,38 @@ class SAM3FursuitIdentifier:
         use_segmentation: bool = False,
         save_crops: bool = False,
         crop_prefix: str = "query",
-    ) -> list[IdentificationResult]:
+    ) -> list[IdentificationResult] | list[SegmentResults]:
         """Identify fursuit character(s) in an image.
 
         Args:
             image: Input image
-            top_k: Number of results to return
+            top_k: Number of results to return per segment
             use_segmentation: Whether to use SAM3 segmentation
             save_crops: Whether to save preprocessed crops for debugging
             crop_prefix: Prefix for saved crop filenames
 
         Returns:
-            List of identification results
+            When use_segmentation=False: List of IdentificationResult
+            When use_segmentation=True: List of SegmentResults (one per segment)
         """
         if self.index.size == 0:
             print("Warning: Index is empty")
             return []
 
         if use_segmentation:
-            results = self.pipeline.process(image)
-            all_matches = []
-            for i, proc_result in enumerate(results):
+            proc_results = self.pipeline.process(image)
+            segment_results = []
+            for i, proc_result in enumerate(proc_results):
                 if save_crops and proc_result.isolated_crop:
                     self._save_debug_crop(proc_result.isolated_crop, f"{crop_prefix}_{i}")
                 matches = self._search_embedding(proc_result.embedding, top_k)
-                all_matches.extend(matches)
-            all_matches.sort(key=lambda x: x.confidence, reverse=True)
-            return all_matches[:top_k]
+                segment_results.append(SegmentResults(
+                    segment_index=i,
+                    segment_bbox=proc_result.segmentation.bbox,
+                    segment_confidence=proc_result.segmentation.confidence,
+                    matches=matches,
+                ))
+            return segment_results
         else:
             # For non-segmented, save the resized input that goes to embedder
             if save_crops:

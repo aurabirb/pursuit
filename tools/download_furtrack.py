@@ -16,8 +16,6 @@ import json
 import os
 import random
 import sqlite3
-from itertools import islice
-from typing import Iterable
 
 import requests
 

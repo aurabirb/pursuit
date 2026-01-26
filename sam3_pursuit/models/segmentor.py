@@ -22,6 +22,7 @@ class FullImageSegmentor:
         self.model_name = "full"
 
     def segment(self, image: Image.Image) -> list[SegmentationResult]:
+        print("Using FullImageSegmentor: returning full image as single segment")
         w, h = image.size
         full_mask = np.ones((h, w), dtype=np.uint8)
         return [SegmentationResult(
@@ -66,6 +67,7 @@ class FursuitSegmentor:
         return SAM3SemanticPredictor(overrides=overrides)
 
     def segment(self, image: Image.Image) -> list[SegmentationResult]:
+        print(f"Segmenting image using {self.model_name} with concept '{self.concept}'")
         image_np = np.array(image.convert("RGB"))
         self.predictor.set_image(image_np)
         results = self.predictor(text=self.concept.split(","))

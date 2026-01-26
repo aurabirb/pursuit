@@ -30,7 +30,7 @@ def get_identifier() -> SAM3FursuitIdentifier:
 
 
 async def photo(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    """Handle photo messages - identify the character in the photo."""
+    """Handle photo messages."""
     if not update.message:
         print("Invalid message", file=sys.stderr)
         return
@@ -42,6 +42,9 @@ async def photo(update: Update, context: ContextTypes.DEFAULT_TYPE):
             text="Please send a photo."
         )
         return
+
+    message = update.message.text or ""
+    print(f"Received annotated message: {message}")
 
     # Get the largest photo
     new_file = await attachment[-1].get_file()

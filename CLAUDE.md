@@ -150,8 +150,8 @@ results = identifier.identify(image, top_k=5)
 for result in results:
     print(f"{result.character_name}: {result.confidence:.1%}")
 
-# Add images for a new character
-identifier.add_images("MyCharacter", ["img1.jpg", "img2.jpg"])
+# Add images for characters
+identifier.add_images(["MyCharacter", "Zygote"], ["img1.jpg", "img2.jpg"])
 
 # Get statistics
 stats = identifier.get_stats()

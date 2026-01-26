@@ -159,7 +159,7 @@ def add_command(args):
 
     identifier = _get_identifier(args)
     added = identifier.add_images(
-        character_name=args.character,
+        character_names=[args.character] * len(valid_paths),
         image_paths=valid_paths,
         use_segmentation=args.segment,
         concept=args.concept,
@@ -318,7 +318,7 @@ def ingest_from_directory(identifier, args):
         if images:
             print(f"Ingesting {len(images)} images for {character_name}")
             added = identifier.add_images(
-                character_name=character_name,
+                character_names=[character_name] * len(images),
                 image_paths=[str(p) for p in images],
                 batch_size=args.batch_size,
                 use_segmentation=args.segment,
@@ -380,7 +380,7 @@ def ingest_from_furtrack(identifier, args):
 
         print(f"Ingesting {len(img_paths)} images for {char_name}")
         added = identifier.add_images(
-            character_name=char_name,
+            character_names=[char_name] * len(img_paths),
             image_paths=img_paths,
             batch_size=args.batch_size,
             use_segmentation=args.segment,
@@ -413,25 +413,24 @@ def ingest_from_nfc25(identifier, args):
 
     total_added = 0
 
+    char_names = []
+    img_paths = []
     for fursuit in fursuit_list:
-        char_name = fursuit.get("NickName", "")
+        char_names.append(fursuit.get("NickName", ""))
         img_filename = str(fursuit.get("ImageUrl")).split("/")[-1]
-        img_path = images_dir / img_filename
-        if not img_path.exists():
-            print(f'Warning: {img_path} does not exist, skipping.')
-
-        added = identifier.add_images(
-            character_name=char_name,
-            image_paths=[str(img_path)],
-            batch_size=1,
-            use_segmentation=args.segment,
-            concept=args.concept,
-            save_crops=args.save_crops,
-        )
-        total_added += added
-
+        img_paths.append(str(images_dir / img_filename))
         if args.limit and total_added >= args.limit:
             break
+
+    added = identifier.add_images(
+        character_names=char_names,
+        image_paths=img_paths,
+        # batch_size=1,
+        use_segmentation=args.segment,
+        concept=args.concept,
+        save_crops=args.save_crops,
+    )
+    total_added += added
 
     print(f"\nTotal: Added {total_added} images")
 

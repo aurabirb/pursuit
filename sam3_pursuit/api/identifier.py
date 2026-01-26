@@ -98,19 +98,22 @@ class SAM3FursuitIdentifier:
 
     def add_images(
         self,
-        character_name: str,
+        character_names: list[str],
         image_paths: list[str],
         batch_size: int = Config.DEFAULT_BATCH_SIZE,
-        use_segmentation: bool = False,
+        use_segmentation: bool = True,
         concept: str = Config.DEFAULT_CONCEPT,
         save_crops: bool = False,
         source_url: Optional[str] = None,
     ) -> int:
-        """Add images for a character to the index."""
+        """Add images for characters to the index."""
         added_count = 0
+
+        assert len(character_names) == len(image_paths)
 
         for i in range(0, len(image_paths), batch_size):
             batch_paths = image_paths[i:i + batch_size]
+            batch_char_names = character_names[i:i + batch_size]
             batch_images = []
             batch_post_ids = []
             batch_filenames = []
@@ -118,8 +121,6 @@ class SAM3FursuitIdentifier:
             for img_path in batch_paths:
                 try:
                     image = self._load_image(img_path)
-                    if image is None:
-                        continue
                     batch_images.append(image)
                     batch_post_ids.append(self._extract_post_id(img_path))
                     batch_filenames.append(os.path.basename(img_path))
@@ -131,7 +132,7 @@ class SAM3FursuitIdentifier:
                 continue
 
             if use_segmentation:
-                for image, post_id, filename in zip(batch_images, batch_post_ids, batch_filenames):
+                for image, post_id, filename, character_name in zip(batch_images, batch_post_ids, batch_filenames, batch_char_names):
                     proc_results = self.pipeline.process(image, concept=concept)
                     for proc_result in proc_results:
                         self._add_single_embedding(
@@ -168,7 +169,7 @@ class SAM3FursuitIdentifier:
                     )
                     added_count += 1
 
-            print(f"Added {added_count} images for {character_name}")
+            print(f"Added {added_count} images...")
 
         self.index.save()
         return added_count
@@ -219,18 +220,20 @@ class SAM3FursuitIdentifier:
             crop_path=crop_path,
         )
         self.db.add_detection(detection)
+        print(f'Saved {character_name} at {bbox} confidence {confidence}')
 
-    def _load_image(self, img_path: str) -> Optional[Image.Image]:
-        try:
-            if img_path.startswith(('http://', 'https://')):
-                response = requests.get(img_path, timeout=10)
-                response.raise_for_status()
-                return Image.open(BytesIO(response.content))
-            else:
-                return Image.open(img_path)
-        except Exception as e:
-            print(f"Failed to load {img_path}: {e}")
-            return None
+    def _load_image(self, img_path: str) -> Image.Image:
+        if img_path.startswith(('http://', 'https://')):
+            response = requests.get(img_path, timeout=10)
+            response.raise_for_status()
+            img = Image.open(BytesIO(response.content))
+        else:
+            if not Path(img_path).exists():
+                raise FileNotFoundError()
+            img = Image.open(img_path)
+        if img is None:
+            raise ValueError()
+        return img
 
     def _extract_post_id(self, img_path: str) -> str:
         basename = os.path.basename(img_path)

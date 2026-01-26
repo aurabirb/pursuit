@@ -16,6 +16,7 @@ import json
 import os
 import random
 import sqlite3
+from typing import Optional
 
 import requests
 
@@ -23,6 +24,8 @@ import requests
 MAX_CHAR_ENTRIES = 10  # Max images per character to download
 DB_PATH = "furtrack.db"
 IMAGES_DIR = "furtrack_images"
+CACHE_DIR = "furtrack_cache"
+
 
 
 def get_url(url: str) -> requests.Response:
@@ -49,21 +52,35 @@ def get_url(url: str) -> requests.Response:
     )
 
 
-def get_json(url: str) -> dict:
-    """Fetch JSON from URL."""
-    r = get_url(url)
-    if r.status_code != 200:
-        raise Exception(f"HTTP {r.status_code}: {r.url}")
-    return r.json()
+def get_json(url: str) -> Optional[dict]:
+    """Fetch JSON from URL, or find the result in cache."""
+    os.makedirs(CACHE_DIR, exist_ok=True)
+    cache_file = os.path.join(CACHE_DIR, url.replace("https://", "").replace("/", "_") + ".json")
+    if os.path.exists(cache_file):
+        with open(cache_file, "r") as f:
+            return json.load(f)
+    try:
+        r = get_url(url)
+        if r.status_code != 200:
+            raise Exception(f"HTTP status {r.status_code}")
+        ret = r.json()
+    except Exception as e:
+        print(f"Error fetching {url}: {e}")
+        return None
+
+    with open(cache_file, "w") as f:
+        json.dump(ret, f, indent=2)
+
+    return ret
 
 
-def make_requests(urls: list[str], max_concurrent: int = 20, verbose: bool = True):
+def make_requests(urls: list[str], max_concurrent: int = 20, verbose: bool = True, function=get_url):
     """Make concurrent HTTP requests."""
     chunks = [urls[i:i + max_concurrent] for i in range(0, len(urls), max_concurrent)]
     total = 0
     for chunk in chunks:
         with concurrent.futures.ThreadPoolExecutor() as executor:
-            results = executor.map(get_url, chunk)
+            results = executor.map(function, chunk)
             total += len(chunk)
             if verbose:
                 print(f"Requested {total}/{len(urls)} urls")
@@ -181,7 +198,7 @@ def count_character_posts(char: str) -> int:
 
 # Download functions
 
-def download_images(url_names: list[tuple[str, str]], folder: str):
+def download_images(url_names: list[tuple[str, str]], folder: str) -> int:
     """Download images to folder."""
     os.makedirs(folder, exist_ok=True)
 
@@ -192,7 +209,7 @@ def download_images(url_names: list[tuple[str, str]], folder: str):
         print(f"Skipping {len(url_names) - len(to_download)} existing images")
 
     if not to_download:
-        return
+        return 0
 
     print(f"Downloading {len(to_download)} images...")
     urls = [u for u, _ in to_download]
@@ -202,6 +219,7 @@ def download_images(url_names: list[tuple[str, str]], folder: str):
         if r.status_code == 200:
             with open(os.path.join(folder, f"{name}.jpg"), "wb") as f:
                 f.write(r.content)
+    return len(to_download)
 
 
 def fetch_posts(post_ids: list[int]) -> list[dict]:
@@ -209,9 +227,10 @@ def fetch_posts(post_ids: list[int]) -> list[dict]:
     urls = [f"https://solar.furtrack.com/get/p/{pid}" for pid in post_ids]
     results = []
 
-    for pid, r in zip(post_ids, make_requests(urls)):
+    for pid, raw in zip(post_ids, make_requests(urls, function=get_json)):
         try:
-            raw = r.json()
+            if raw is None:
+                continue
             if is_valid_post(raw):
                 results.append({
                     "post_id": str(pid),
@@ -236,21 +255,18 @@ def get_character_post_ids(char: str) -> list[int]:
     return post_ids
 
 
-def get_all_characters() -> list[str]:
+def get_all_characters() -> list[tuple[str, int]]:
     """Get list of all character tags from FurTrack."""
     url = "https://solar.furtrack.com/get/tags/all"
     data = get_json(url)
-    # Save all tags to file
-    with open("furtrack_tags.json", "w") as f:
-        json.dump(data, f, indent=2)
     return [
-        t["tagName"].removeprefix("1:")
+        (t["tagName"].removeprefix("1:"), t.get("tagCount", 0))
         for t in data.get("tags", [])
         if t.get("tagName", "").startswith("1:")
     ]
 
 
-def download_character(char: str, max_images: int = MAX_CHAR_ENTRIES):
+def download_character(char: str, max_images: int = MAX_CHAR_ENTRIES, folder=IMAGES_DIR) -> int:
     """Download images for a single character."""
     # Skip if we already have enough
     existing = count_character_posts(char)
@@ -272,23 +288,24 @@ def download_character(char: str, max_images: int = MAX_CHAR_ENTRIES):
 
     # Download images
     valid = [(p["url"], p["post_id"]) for p in posts if p["url"] and p["char"]]
-    download_images(valid, IMAGES_DIR)
-
-    return len(valid)
+    return download_images(valid, folder)
 
 
-def download_all_characters():
+def download_all_characters(folder: str = IMAGES_DIR):
     """Download images for all characters."""
-    chars = get_all_characters()
-    print(f"Found {len(chars)} characters")
+    posts = get_all_characters()
+    print(f"Found {len(posts)} characters")
 
-    random.seed(42)
-    random.shuffle(chars)
+    # sort to put popular characters first
+    posts.sort(key=lambda c: c[1], reverse=True)
+
+    # random.seed(42)
+    # random.shuffle(posts)
 
     total = 0
-    for i, char in enumerate(chars):
-        print(f"[{i+1}/{len(chars)}] {char}")
-        count = download_character(char)
+    for i, (char, _) in enumerate(posts):
+        print(f"[{i+1}/{len(posts)}] {char}")
+        count = download_character(char, MAX_CHAR_ENTRIES, folder)
         total += count
         if count:
             print(f"  Downloaded {count} images")

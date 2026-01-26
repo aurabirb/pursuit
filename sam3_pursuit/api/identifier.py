@@ -91,9 +91,22 @@ class SAM3FursuitIdentifier:
         self,
         image: Image.Image,
         top_k: int = Config.DEFAULT_TOP_K,
-        use_segmentation: bool = False
+        use_segmentation: bool = False,
+        save_crops: bool = False,
+        crop_prefix: str = "query",
     ) -> list[IdentificationResult]:
-        """Identify fursuit character(s) in an image."""
+        """Identify fursuit character(s) in an image.
+
+        Args:
+            image: Input image
+            top_k: Number of results to return
+            use_segmentation: Whether to use SAM3 segmentation
+            save_crops: Whether to save preprocessed crops for debugging
+            crop_prefix: Prefix for saved crop filenames
+
+        Returns:
+            List of identification results
+        """
         if self.index.size == 0:
             print("Warning: Index is empty")
             return []
@@ -101,14 +114,35 @@ class SAM3FursuitIdentifier:
         if use_segmentation:
             results = self.pipeline.process(image)
             all_matches = []
-            for proc_result in results:
+            for i, proc_result in enumerate(results):
+                if save_crops and proc_result.isolated_crop:
+                    self._save_debug_crop(proc_result.isolated_crop, f"{crop_prefix}_{i}")
                 matches = self._search_embedding(proc_result.embedding, top_k)
                 all_matches.extend(matches)
             all_matches.sort(key=lambda x: x.confidence, reverse=True)
             return all_matches[:top_k]
         else:
+            # For non-segmented, save the resized input that goes to embedder
+            if save_crops:
+                from sam3_pursuit.models.embedder import _resize_to_patch_multiple
+                resized = _resize_to_patch_multiple(image.convert("RGB"))
+                self._save_debug_crop(resized, f"{crop_prefix}_full")
             embedding = self.pipeline.embed_only(image)
             return self._search_embedding(embedding, top_k)
+
+    def _save_debug_crop(self, image: Image.Image, name: str, search: bool = True):
+        """Save a debug crop image.
+
+        Args:
+            image: Image to save
+            name: Filename (without extension)
+            search: If True, save to search dir; if False, save to ingest dir
+        """
+        crops_dir = Path(Config.CROPS_SEARCH_DIR if search else Config.CROPS_INGEST_DIR)
+        crops_dir.mkdir(parents=True, exist_ok=True)
+        path = crops_dir / f"{name}.jpg"
+        image.convert("RGB").save(path, quality=90)
+        print(f"Saved crop: {path}")
 
     def _search_embedding(self, embedding: np.ndarray, top_k: int) -> list[IdentificationResult]:
         distances, indices = self.index.search(embedding, top_k * 2)
@@ -377,8 +411,8 @@ class SAM3FursuitIdentifier:
 
         crop_path = None
         if crop_image is not None:
-            crops_dir = Path(Config.CROPS_DIR)
-            crops_dir.mkdir(exist_ok=True)
+            crops_dir = Path(Config.CROPS_INGEST_DIR)
+            crops_dir.mkdir(parents=True, exist_ok=True)
             crop_path = str(crops_dir / f"{post_id}_{embedding_id}.jpg")
             crop_image.convert("RGB").save(crop_path, quality=90)
 

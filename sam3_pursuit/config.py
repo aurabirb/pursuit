@@ -15,6 +15,8 @@ class Config:
     DB_PATH = os.path.join(BASE_DIR, DEFAULT_DB_NAME)
     INDEX_PATH = os.path.join(BASE_DIR, DEFAULT_INDEX_NAME)
     CROPS_DIR = os.path.join(BASE_DIR, DEFAULT_CROPS_DIR)
+    CROPS_INGEST_DIR = os.path.join(BASE_DIR, DEFAULT_CROPS_DIR, "ingest")
+    CROPS_SEARCH_DIR = os.path.join(BASE_DIR, DEFAULT_CROPS_DIR, "search")
     IMAGES_DIR = os.path.join(BASE_DIR, "furtrack_images")
 
     # Models

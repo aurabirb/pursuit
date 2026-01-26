@@ -59,6 +59,7 @@ Examples:
     identify_parser = subparsers.add_parser("identify", help="Identify character in an image")
     identify_parser.add_argument("image", help="Path to image file")
     identify_parser.add_argument("--top-k", "-k", type=int, default=5, help="Number of results")
+    identify_parser.add_argument("--save-crops", action="store_true", help="Save preprocessed crops for debugging")
 
     # Add command
     add_parser = subparsers.add_parser("add", help="Add images for a character")
@@ -158,7 +159,15 @@ def identify_command(args):
 
     identifier = _get_identifier(args)
     image = Image.open(image_path)
-    results = identifier.identify(image, top_k=args.top_k, use_segmentation=args.segment)
+    save_crops = getattr(args, "save_crops", False)
+    crop_prefix = image_path.stem
+    results = identifier.identify(
+        image,
+        top_k=args.top_k,
+        use_segmentation=args.segment,
+        save_crops=save_crops,
+        crop_prefix=crop_prefix,
+    )
 
     if not results:
         print("No matches found.")

@@ -1,6 +1,7 @@
 """Telegram bot for fursuit character identification using SAM3 system."""
 
 import os
+import re
 import sys
 from tempfile import NamedTemporaryFile
 
@@ -17,6 +18,9 @@ from telegram.ext import (
 
 from sam3_pursuit import SAM3FursuitIdentifier, Config
 
+# Pattern to match "character:Name" in caption
+CHARACTER_PATTERN = re.compile(r"character:(\S+)", re.IGNORECASE)
+
 # Global identifier instance (lazy loaded)
 _identifier = None
 
@@ -30,7 +34,11 @@ def get_identifier() -> SAM3FursuitIdentifier:
 
 
 async def photo(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    """Handle photo messages."""
+    """Handle photo messages.
+
+    If caption contains "character:Name", adds the image to the database.
+    Otherwise, identifies the character in the image.
+    """
     if not update.message:
         print("Invalid message", file=sys.stderr)
         return
@@ -43,10 +51,60 @@ async def photo(update: Update, context: ContextTypes.DEFAULT_TYPE):
         )
         return
 
-    message = update.message.text or ""
-    print(f"Received annotated message: {message}")
+    caption = update.message.caption or ""
+    print(f"Received photo with caption: {caption}")
 
-    # Get the largest photo
+    # Check if this is an add request
+    match = CHARACTER_PATTERN.search(caption)
+    if match:
+        await add_photo(update, context, match.group(1))
+    else:
+        await identify_photo(update, context)
+
+
+async def add_photo(update: Update, context: ContextTypes.DEFAULT_TYPE, character_name: str):
+    """Add a photo to the database for a character."""
+    attachment = update.message.effective_attachment
+    new_file = await attachment[-1].get_file()
+
+    try:
+        with NamedTemporaryFile(delete=False, suffix=".jpg") as f:
+            bs = await new_file.download_as_bytearray()
+            f.write(bs)
+            f.flush()
+            temp_path = f.name
+
+        identifier = get_identifier()
+        added = identifier.add_images(
+            character_names=[character_name],
+            image_paths=[temp_path],
+        )
+
+        # Clean up temp file
+        os.unlink(temp_path)
+
+        if added > 0:
+            await context.bot.send_message(
+                chat_id=update.effective_chat.id,
+                text=f"Added {added} image(s) for character '{character_name}'."
+            )
+        else:
+            await context.bot.send_message(
+                chat_id=update.effective_chat.id,
+                text=f"Failed to add image for '{character_name}'. No segments detected."
+            )
+
+    except Exception as e:
+        print(f"Error adding image: {e}", file=sys.stderr)
+        await context.bot.send_message(
+            chat_id=update.effective_chat.id,
+            text=f"Error adding image: {e}"
+        )
+
+
+async def identify_photo(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """Identify the character in a photo."""
+    attachment = update.message.effective_attachment
     new_file = await attachment[-1].get_file()
 
     try:
@@ -104,8 +162,10 @@ async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
     """Handle /start command."""
     await context.bot.send_message(
         chat_id=update.effective_chat.id,
-        text="I'm a bot that identifies fursuiters in pictures. "
-             "Send me a photo and I'll try to identify the character!"
+        text="I'm a bot that identifies fursuiters in pictures.\n\n"
+             "Send me a photo and I'll try to identify the character!\n\n"
+             "To add a new character to the database, send a photo with "
+             "the caption: character:Name"
     )
 
 

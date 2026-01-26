@@ -270,7 +270,9 @@ class Database:
         conn.close()
         return exists
 
-    def get_posts_needing_update(self, post_ids: list[str], git_version: Optional[str] = None) -> set[str]:
+    def get_posts_needing_update(
+        self, post_ids: list[str], git_version: Optional[str] = None, preprocessing_info: Optional[str] = None
+    ) -> set[str]:
         if git_version is None:
             git_version = get_git_version()
         if not post_ids:
@@ -279,16 +281,20 @@ class Database:
         conn = sqlite3.connect(self.db_path)
         c = conn.cursor()
 
-        # Find posts that exist with current version
         placeholders = ",".join("?" * len(post_ids))
-        c.execute(
-            f"SELECT DISTINCT post_id FROM detections WHERE post_id IN ({placeholders}) AND git_version = ?",
-            (*post_ids, git_version)
-        )
+        if preprocessing_info:
+            c.execute(
+                f"SELECT DISTINCT post_id FROM detections WHERE post_id IN ({placeholders}) AND git_version = ? AND preprocessing_info = ?",
+                (*post_ids, git_version, preprocessing_info)
+            )
+        else:
+            c.execute(
+                f"SELECT DISTINCT post_id FROM detections WHERE post_id IN ({placeholders}) AND git_version = ?",
+                (*post_ids, git_version)
+            )
         existing = {row[0] for row in c.fetchall()}
         conn.close()
 
-        # Return posts that need processing
         return set(post_ids) - existing
 
     def get_next_embedding_id(self) -> int:

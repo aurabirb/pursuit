@@ -43,6 +43,7 @@ class FursuitSegmentor:
             device=self.device,
             imgsz=644,
             verbose=False,
+            save=False,
         )
         return SAM3SemanticPredictor(overrides=overrides)
 

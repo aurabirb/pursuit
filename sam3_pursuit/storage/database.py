@@ -9,7 +9,7 @@ from typing import Optional
 from sam3_pursuit.config import Config
 
 
-def retry_on_locked(max_retries: int = 5, base_delay: float = 0.1):
+def retry_on_locked(max_retries: int = 8, base_delay: float = 0.2):
     """Decorator to retry database operations on lock errors with exponential backoff."""
     def decorator(func):
         @wraps(func)
@@ -21,6 +21,7 @@ def retry_on_locked(max_retries: int = 5, base_delay: float = 0.1):
                 except sqlite3.OperationalError as e:
                     if "database is locked" in str(e):
                         last_error = e
+                        # Exponential backoff: 0.2, 0.4, 0.8, 1.6, 3.2, 6.4, 12.8, 25.6 = ~51s total
                         delay = base_delay * (2 ** attempt)
                         time.sleep(delay)
                     else:
@@ -76,15 +77,29 @@ class Database:
         source_filename, source_url, is_cropped, segmentation_concept,
         preprocessing_info, crop_path, git_version
     """
-    # Timeout in seconds to wait for database lock
-    _TIMEOUT = 30.0
+    # Timeout in seconds to wait for database lock (Python level)
+    _TIMEOUT = 10.0
+    # SQLite busy timeout in milliseconds
+    _BUSY_TIMEOUT_MS = 15000
 
     def __init__(self, db_path: str = Config.DB_PATH):
         self.db_path = db_path
+        self._conn: Optional[sqlite3.Connection] = None
         self._init_database()
 
     def _connect(self) -> sqlite3.Connection:
-        return sqlite3.connect(self.db_path, timeout=self._TIMEOUT)
+        """Get or create a persistent connection."""
+        if self._conn is None:
+            self._conn = sqlite3.connect(self.db_path, timeout=self._TIMEOUT)
+            # Set SQLite-level busy timeout for better lock handling
+            self._conn.execute(f"PRAGMA busy_timeout = {self._BUSY_TIMEOUT_MS}")
+        return self._conn
+
+    def close(self):
+        """Close the persistent connection."""
+        if self._conn is not None:
+            self._conn.close()
+            self._conn = None
 
     def _init_database(self):
         conn = self._connect()
@@ -139,7 +154,6 @@ class Database:
                 c.execute(f"ALTER TABLE detections ADD COLUMN {col_name} {col_type}")
 
         conn.commit()
-        conn.close()
 
     @retry_on_locked()
     def add_detection(self, detection: Detection) -> int:
@@ -173,7 +187,6 @@ class Database:
 
         row_id = c.lastrowid
         conn.commit()
-        conn.close()
         return row_id
 
     def _row_to_detection(self, row) -> Detection:
@@ -198,38 +211,39 @@ class Database:
             git_version=row[17] if len(row) > 17 else None,
         )
 
+    @retry_on_locked()
     def get_detection_by_embedding_id(self, embedding_id: int) -> Optional[Detection]:
         conn = self._connect()
         c = conn.cursor()
         c.execute(f"SELECT {self._SELECT_FIELDS} FROM detections WHERE embedding_id = ?", (embedding_id,))
         row = c.fetchone()
-        conn.close()
         return self._row_to_detection(row) if row else None
 
+    @retry_on_locked()
     def get_detection_by_id(self, detection_id: int) -> Optional[Detection]:
         conn = self._connect()
         c = conn.cursor()
         c.execute(f"SELECT {self._SELECT_FIELDS} FROM detections WHERE id = ?", (detection_id,))
         row = c.fetchone()
-        conn.close()
         return self._row_to_detection(row) if row else None
 
+    @retry_on_locked()
     def get_detections_by_post_id(self, post_id: str) -> list[Detection]:
         conn = self._connect()
         c = conn.cursor()
         c.execute(f"SELECT {self._SELECT_FIELDS} FROM detections WHERE post_id = ?", (post_id,))
         rows = c.fetchall()
-        conn.close()
         return [self._row_to_detection(row) for row in rows]
 
+    @retry_on_locked()
     def get_detections_by_character(self, character_name: str) -> list[Detection]:
         conn = self._connect()
         c = conn.cursor()
         c.execute(f"SELECT {self._SELECT_FIELDS} FROM detections WHERE character_name = ?", (character_name,))
         rows = c.fetchall()
-        conn.close()
         return [self._row_to_detection(row) for row in rows]
 
+    @retry_on_locked()
     def get_stats(self) -> dict:
         conn = self._connect()
         c = conn.cursor()
@@ -269,8 +283,6 @@ class Database:
         """)
         git_version_breakdown = dict(c.fetchall())
 
-        conn.close()
-
         return {
             "total_detections": total,
             "unique_characters": unique_chars,
@@ -281,14 +293,15 @@ class Database:
             "git_version_breakdown": git_version_breakdown,
         }
 
+    @retry_on_locked()
     def has_post(self, post_id: str) -> bool:
         conn = self._connect()
         c = conn.cursor()
         c.execute("SELECT 1 FROM detections WHERE post_id = ? LIMIT 1", (post_id,))
         exists = c.fetchone() is not None
-        conn.close()
         return exists
 
+    @retry_on_locked()
     def get_posts_needing_update(self, post_ids: list[str], preprocessing_info: str) -> set[str]:
         """Return post_ids that don't have an entry with this preprocessing_info."""
         if not post_ids or not preprocessing_info:
@@ -303,7 +316,6 @@ class Database:
             (*post_ids, preprocessing_info)
         )
         existing = {row[0] for row in c.fetchall()}
-        conn.close()
 
         return set(post_ids) - existing
 
@@ -313,5 +325,4 @@ class Database:
         c = conn.cursor()
         c.execute("SELECT MAX(embedding_id) FROM detections")
         result = c.fetchone()[0]
-        conn.close()
         return 0 if result is None else result + 1

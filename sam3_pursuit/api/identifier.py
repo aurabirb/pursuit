@@ -140,6 +140,7 @@ class SAM3FursuitIdentifier:
         image_paths: list[str],
         save_crops: bool = False,
         source_url: Optional[str] = None,
+        add_full_image: bool = True,
     ) -> int:
         assert len(character_names) == len(image_paths)
 
@@ -172,11 +173,32 @@ class SAM3FursuitIdentifier:
                 print(f"[{i+1}/{total}] Failed to load {filename}: {e}")
                 continue
 
+            w, h = image.size
+
+            # Add full image embedding (no segmentation/isolation)
+            if add_full_image:
+                resized_full = self.pipeline._resize_to_patch_multiple(image)
+                full_embedding = self.pipeline.embed_only(resized_full)
+                self._add_single_embedding(
+                    embedding=full_embedding,
+                    post_id=post_id,
+                    character_name=character_name,
+                    bbox=(0, 0, w, h),
+                    confidence=1.0,
+                    segmentor_model="full",
+                    source_filename=filename,
+                    source_url=source_url,
+                    is_cropped=False,
+                    segmentation_concept=None,
+                    preprocessing_info=preprocessing_info,
+                )
+                added_count += 1
+
             # Process: segment -> isolate -> embed
             proc_results = self.pipeline.process(image)
 
             if not proc_results:
-                print(f"[{i+1}/{total}] {character_name}: no segments found")
+                print(f"[{i+1}/{total}] {character_name}: no segments found (full image added)")
                 continue
 
             for proc_result in proc_results:
@@ -197,7 +219,9 @@ class SAM3FursuitIdentifier:
                 )
                 added_count += 1
 
-            print(f"[{i+1}/{total}] {character_name}: {len(proc_results)} segments, {added_count} total")
+            segment_count = len(proc_results)
+            full_msg = "+full" if add_full_image else ""
+            print(f"[{i+1}/{total}] {character_name}: {segment_count} segments{full_msg}, {added_count} total")
 
             # Periodically save index with backup
             if (i + 1) % save_interval == 0:

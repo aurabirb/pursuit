@@ -20,7 +20,7 @@ import aiohttp
 import requests
 
 # Configuration
-MAX_IMAGES_PER_CHAR = 5
+MAX_IMAGES_PER_CHAR = 2
 CACHE_DB = "furtrack_cache.db"
 IMAGES_DIR = "furtrack_images"
 MAX_CONCURRENT_DOWNLOADS = 20

@@ -60,6 +60,8 @@ Examples:
     add_parser.add_argument("--character", "-c", required=True, help="Character name")
     add_parser.add_argument("images", nargs="+", help="Image paths")
     add_parser.add_argument("--save-crops", action="store_true", help="Save crop images for debugging")
+    add_parser.add_argument("--no-full", dest="add_full_image", action="store_false",
+                           help="Don't add full image embedding (only segments)")
 
     show_parser = subparsers.add_parser("show", help="View database entries")
     show_parser.add_argument("--by-id", type=int, help="Query by detection ID")
@@ -74,6 +76,8 @@ Examples:
     ingest_parser.add_argument("--limit", type=int, help="Limit number of images per character")
     ingest_parser.add_argument("--batch-size", type=int, default=16, help="Batch size")
     ingest_parser.add_argument("--save-crops", action="store_true", help="Save crop images")
+    ingest_parser.add_argument("--no-full", dest="add_full_image", action="store_false",
+                               help="Don't add full image embedding (only segments)")
 
     stats_parser = subparsers.add_parser("stats", help="Show system statistics")
     stats_parser.add_argument("--json", action="store_true", help="Output as JSON")
@@ -202,10 +206,12 @@ def add_command(args):
         sys.exit(1)
 
     identifier = _get_identifier(args)
+    add_full_image = getattr(args, "add_full_image", True)
     added = identifier.add_images(
         character_names=[args.character] * len(valid_paths),
         image_paths=valid_paths,
-        save_crops=args.save_crops
+        save_crops=args.save_crops,
+        add_full_image=add_full_image,
     )
 
     print(f"\nAdded {added} images for character '{args.character}'")
@@ -314,10 +320,12 @@ def ingest_from_directory(args):
 
         if images:
             print(f"Ingesting {len(images)} images for {character_name}")
+            add_full_image = getattr(args, "add_full_image", True)
             added = identifier.add_images(
                 character_names=[character_name] * len(images),
                 image_paths=[str(p) for p in images],
                 save_crops=args.save_crops,
+                add_full_image=add_full_image,
             )
             total_added += added
 
@@ -372,6 +380,7 @@ def ingest_from_furtrack(args):
 
     total_added = 0
 
+    add_full_image = getattr(args, "add_full_image", True)
     for char_name, img_paths in sorted(character_images.items()):
         if args.limit:
             img_paths = img_paths[:args.limit]
@@ -381,6 +390,7 @@ def ingest_from_furtrack(args):
             character_names=[char_name] * len(img_paths),
             image_paths=img_paths,
             save_crops=args.save_crops,
+            add_full_image=add_full_image,
         )
         total_added += added
 
@@ -419,11 +429,13 @@ def ingest_from_nfc25(args):
         if args.limit and total_added >= args.limit:
             break
 
+    add_full_image = getattr(args, "add_full_image", True)
     added = identifier.add_images(
         character_names=char_names,
         image_paths=img_paths,
         save_crops=args.save_crops,
         source_url=str(fursuit.get("ImageUrl")),
+        add_full_image=add_full_image,
     )
     total_added += added
 

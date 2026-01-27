@@ -79,6 +79,7 @@ async def add_photo(update: Update, context: ContextTypes.DEFAULT_TYPE, characte
             character_names=[character_name],
             image_paths=[temp_path],
             source_url=f"tg://bot_upload/chat/{update.effective_chat.id}/msg/{update.message.message_id}/file/{new_file.file_id}",
+            add_full_image=True,
         )
 
         # Clean up temp file

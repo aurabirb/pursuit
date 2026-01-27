@@ -161,6 +161,9 @@ class SAM3FursuitIdentifier:
     ) -> int:
         assert len(character_names) == len(image_paths)
 
+        # Normalize character names: lowercase with underscores
+        character_names = [name.lower().replace(" ", "_") for name in character_names]
+
         full_preproc = self._build_full_preprocessing_info() if add_full_image else None
         seg_preproc = self._build_preprocessing_info()
 

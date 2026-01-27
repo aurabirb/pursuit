@@ -1,11 +1,33 @@
 import sqlite3
 import subprocess
+import time
 from dataclasses import dataclass
 from datetime import datetime
-from functools import lru_cache
+from functools import lru_cache, wraps
 from typing import Optional
 
 from sam3_pursuit.config import Config
+
+
+def retry_on_locked(max_retries: int = 5, base_delay: float = 0.1):
+    """Decorator to retry database operations on lock errors with exponential backoff."""
+    def decorator(func):
+        @wraps(func)
+        def wrapper(*args, **kwargs):
+            last_error = None
+            for attempt in range(max_retries):
+                try:
+                    return func(*args, **kwargs)
+                except sqlite3.OperationalError as e:
+                    if "database is locked" in str(e):
+                        last_error = e
+                        delay = base_delay * (2 ** attempt)
+                        time.sleep(delay)
+                    else:
+                        raise
+            raise last_error
+        return wrapper
+    return decorator
 
 
 @lru_cache(maxsize=1)
@@ -54,14 +76,22 @@ class Database:
         source_filename, source_url, is_cropped, segmentation_concept,
         preprocessing_info, crop_path, git_version
     """
+    # Timeout in seconds to wait for database lock
+    _TIMEOUT = 30.0
 
     def __init__(self, db_path: str = Config.DB_PATH):
         self.db_path = db_path
         self._init_database()
 
+    def _connect(self) -> sqlite3.Connection:
+        return sqlite3.connect(self.db_path, timeout=self._TIMEOUT)
+
     def _init_database(self):
-        conn = sqlite3.connect(self.db_path)
+        conn = self._connect()
         c = conn.cursor()
+
+        # Enable WAL mode for better write concurrency
+        c.execute("PRAGMA journal_mode=WAL")
 
         c.execute("""
             CREATE TABLE IF NOT EXISTS detections (
@@ -110,8 +140,9 @@ class Database:
         conn.commit()
         conn.close()
 
+    @retry_on_locked()
     def add_detection(self, detection: Detection) -> int:
-        conn = sqlite3.connect(self.db_path)
+        conn = self._connect()
         c = conn.cursor()
 
         c.execute("""
@@ -167,7 +198,7 @@ class Database:
         )
 
     def get_detection_by_embedding_id(self, embedding_id: int) -> Optional[Detection]:
-        conn = sqlite3.connect(self.db_path)
+        conn = self._connect()
         c = conn.cursor()
         c.execute(f"SELECT {self._SELECT_FIELDS} FROM detections WHERE embedding_id = ?", (embedding_id,))
         row = c.fetchone()
@@ -175,7 +206,7 @@ class Database:
         return self._row_to_detection(row) if row else None
 
     def get_detection_by_id(self, detection_id: int) -> Optional[Detection]:
-        conn = sqlite3.connect(self.db_path)
+        conn = self._connect()
         c = conn.cursor()
         c.execute(f"SELECT {self._SELECT_FIELDS} FROM detections WHERE id = ?", (detection_id,))
         row = c.fetchone()
@@ -183,7 +214,7 @@ class Database:
         return self._row_to_detection(row) if row else None
 
     def get_detections_by_post_id(self, post_id: str) -> list[Detection]:
-        conn = sqlite3.connect(self.db_path)
+        conn = self._connect()
         c = conn.cursor()
         c.execute(f"SELECT {self._SELECT_FIELDS} FROM detections WHERE post_id = ?", (post_id,))
         rows = c.fetchall()
@@ -191,7 +222,7 @@ class Database:
         return [self._row_to_detection(row) for row in rows]
 
     def get_detections_by_character(self, character_name: str) -> list[Detection]:
-        conn = sqlite3.connect(self.db_path)
+        conn = self._connect()
         c = conn.cursor()
         c.execute(f"SELECT {self._SELECT_FIELDS} FROM detections WHERE character_name = ?", (character_name,))
         rows = c.fetchall()
@@ -199,7 +230,7 @@ class Database:
         return [self._row_to_detection(row) for row in rows]
 
     def get_stats(self) -> dict:
-        conn = sqlite3.connect(self.db_path)
+        conn = self._connect()
         c = conn.cursor()
 
         c.execute("SELECT COUNT(*) FROM detections")
@@ -250,7 +281,7 @@ class Database:
         }
 
     def has_post(self, post_id: str) -> bool:
-        conn = sqlite3.connect(self.db_path)
+        conn = self._connect()
         c = conn.cursor()
         c.execute("SELECT 1 FROM detections WHERE post_id = ? LIMIT 1", (post_id,))
         exists = c.fetchone() is not None
@@ -260,7 +291,7 @@ class Database:
     def has_post_with_version(self, post_id: str, git_version: Optional[str] = None) -> bool:
         if git_version is None:
             git_version = get_git_version()
-        conn = sqlite3.connect(self.db_path)
+        conn = self._connect()
         c = conn.cursor()
         c.execute(
             "SELECT 1 FROM detections WHERE post_id = ? AND git_version = ? LIMIT 1",
@@ -278,7 +309,7 @@ class Database:
         if not post_ids:
             return set()
 
-        conn = sqlite3.connect(self.db_path)
+        conn = self._connect()
         c = conn.cursor()
 
         placeholders = ",".join("?" * len(post_ids))
@@ -297,8 +328,9 @@ class Database:
 
         return set(post_ids) - existing
 
+    @retry_on_locked()
     def get_next_embedding_id(self) -> int:
-        conn = sqlite3.connect(self.db_path)
+        conn = self._connect()
         c = conn.cursor()
         c.execute("SELECT MAX(embedding_id) FROM detections")
         result = c.fetchone()[0]

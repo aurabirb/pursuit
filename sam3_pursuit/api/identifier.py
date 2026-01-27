@@ -1,4 +1,5 @@
 import os
+import sqlite3
 from dataclasses import dataclass
 from io import BytesIO
 from pathlib import Path
@@ -267,7 +268,10 @@ class SAM3FursuitIdentifier:
             segmentation_concept=segmentation_concept,
             preprocessing_info=preprocessing_info,
         )
-        self.db.add_detection(detection)
+        try:
+            self.db.add_detection(detection)
+        except sqlite3.IntegrityError as e:
+            print(f"Warning: skipping duplicate embedding_id {embedding_id} for {post_id}: {e}")
 
     def _load_image(self, img_path: str) -> Image.Image:
         if img_path.startswith(('http://', 'https://')):

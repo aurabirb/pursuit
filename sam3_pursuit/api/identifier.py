@@ -56,16 +56,9 @@ class SAM3FursuitIdentifier:
         )
 
     def _sync_index_and_db(self):
-        """Ensure FAISS index and database are in sync.
-
-        If the database has detections with embedding_ids beyond what FAISS has,
-        those detections are orphaned (their embeddings were lost due to a crash
-        before FAISS was saved). Delete them to prevent unique constraint errors.
-        """
-        max_valid_id = self.index.size - 1  # FAISS IDs are 0-indexed
-        next_db_id = self.db.get_next_embedding_id()
-        max_db_id = next_db_id - 1
-
+        """Ensure FAISS index and database are in sync (crash recovery)."""
+        max_valid_id = self.index.size - 1
+        max_db_id = self.db.get_next_embedding_id() - 1
         if max_db_id > max_valid_id:
             deleted = self.db.delete_orphaned_detections(max_valid_id)
             if deleted > 0:
@@ -83,23 +76,23 @@ class SAM3FursuitIdentifier:
 
     def _build_preprocessing_info(self) -> str:
         """Build fingerprint for segmented crops."""
-        parts = ["v2", f"seg:{self.pipeline.segmentor_model_name}"]
-        concept = (self.pipeline.segmentor_concept or "").replace('|', '.')
-        parts.append(f"con:{concept}")
         iso = self.pipeline.isolation_config
         mode_map = {"solid": "s", "blur": "b", "none": "n"}
-        parts.append(f"bg:{mode_map.get(iso.mode, 'n')}")
+        parts = [
+            "v2",
+            f"seg:{self.pipeline.segmentor_model_name}",
+            f"con:{(self.pipeline.segmentor_concept or '').replace('|', '.')}",
+            f"bg:{mode_map.get(iso.mode, 'n')}",
+        ]
         if iso.mode == "solid":
             r, g, b = iso.background_color
             parts.append(f"bgc:{r:02x}{g:02x}{b:02x}")
         elif iso.mode == "blur":
             parts.append(f"br:{iso.blur_radius}")
-        parts.append(f"emb:{self._short_embedder_name()}")
-        parts.append(f"tsz:{Config.TARGET_IMAGE_SIZE}")
+        parts += [f"emb:{self._short_embedder_name()}", f"tsz:{Config.TARGET_IMAGE_SIZE}"]
         return "|".join(parts)
 
     def _build_full_preprocessing_info(self) -> str:
-        """Build fingerprint for full image (no segmentation)."""
         return f"v2|seg:full|emb:{self._short_embedder_name()}|tsz:{Config.TARGET_IMAGE_SIZE}"
 
     def identify(
@@ -164,16 +157,14 @@ class SAM3FursuitIdentifier:
         save_crops: bool = False,
         source_url: Optional[str] = None,
         add_full_image: bool = True,
+        batch_size: int = 100,
     ) -> int:
         assert len(character_names) == len(image_paths)
 
-        added_count = 0
         full_preproc = self._build_full_preprocessing_info() if add_full_image else None
         seg_preproc = self._build_preprocessing_info()
 
         post_ids = [self._extract_post_id(p) for p in image_paths]
-
-        # Check which posts need processing for each preprocessing type
         posts_need_full = self.db.get_posts_needing_update(post_ids, full_preproc) if add_full_image else set()
         posts_need_seg = self.db.get_posts_needing_update(post_ids, seg_preproc)
         posts_to_process = posts_need_full | posts_need_seg
@@ -184,7 +175,34 @@ class SAM3FursuitIdentifier:
             return 0
 
         total = len(filtered_indices)
-        save_interval = 500
+        added_count = 0
+        pending_embeddings: list[np.ndarray] = []
+        pending_detections: list[Detection] = []
+
+        def make_detection(post_id, character_name, bbox, confidence, segmentor_model,
+                          filename, is_cropped, seg_concept, preproc_info):
+            return Detection(
+                id=None, post_id=post_id, character_name=character_name, embedding_id=-1,
+                bbox_x=bbox[0], bbox_y=bbox[1], bbox_width=bbox[2], bbox_height=bbox[3],
+                confidence=confidence, segmentor_model=segmentor_model,
+                source_filename=filename, source_url=source_url, is_cropped=is_cropped,
+                segmentation_concept=seg_concept, preprocessing_info=preproc_info,
+            )
+
+        def flush_batch():
+            """Commit DB then save FAISS. If interrupted, _sync_index_and_db cleans up orphans."""
+            nonlocal added_count
+            if not pending_embeddings:
+                return
+            start_id = self.index.add(np.vstack(pending_embeddings).astype(np.float32))
+            for i, detection in enumerate(pending_detections):
+                detection.embedding_id = start_id + i
+            self.db.add_detections_batch(pending_detections)
+            self.index.save(backup=True)
+            added_count += len(pending_detections)
+            print(f"  Batch saved: {len(pending_detections)} embeddings (index: {self.index.size})")
+            pending_embeddings.clear()
+            pending_detections.clear()
 
         for i, idx in enumerate(filtered_indices):
             character_name = character_names[idx]
@@ -202,95 +220,34 @@ class SAM3FursuitIdentifier:
 
             if add_full_image and post_id in posts_need_full:
                 resized_full = self.pipeline._resize_to_patch_multiple(image)
-                full_embedding = self.pipeline.embed_only(resized_full)
-                self._add_single_embedding(
-                    embedding=full_embedding,
-                    post_id=post_id,
-                    character_name=character_name,
-                    bbox=(0, 0, w, h),
-                    confidence=1.0,
-                    segmentor_model="full",
-                    source_filename=filename,
-                    source_url=source_url,
-                    is_cropped=False,
-                    segmentation_concept=None,
-                    preprocessing_info=full_preproc,
-                )
-                added_count += 1
+                pending_embeddings.append(self.pipeline.embed_only(resized_full).reshape(1, -1))
+                pending_detections.append(make_detection(
+                    post_id, character_name, (0, 0, w, h), 1.0, "full",
+                    filename, False, None, full_preproc))
 
             if post_id in posts_need_seg:
                 proc_results = self.pipeline.process(image)
                 for j, proc_result in enumerate(proc_results):
                     if save_crops and proc_result.isolated_crop:
                         self._save_debug_crop(proc_result.isolated_crop, f"{post_id}_seg_{j}", search=False)
-                    self._add_single_embedding(
-                        embedding=proc_result.embedding,
-                        post_id=post_id,
-                        character_name=character_name,
-                        bbox=proc_result.segmentation.bbox,
-                        confidence=proc_result.segmentation.confidence,
-                        segmentor_model=proc_result.segmentor_model,
-                        source_filename=filename,
-                        source_url=source_url,
-                        is_cropped=True,
-                        segmentation_concept=proc_result.segmentor_concept,
-                        preprocessing_info=seg_preproc,
-                    )
-                    added_count += 1
+                    pending_embeddings.append(proc_result.embedding.reshape(1, -1))
+                    pending_detections.append(make_detection(
+                        post_id, character_name, proc_result.segmentation.bbox,
+                        proc_result.segmentation.confidence, proc_result.segmentor_model,
+                        filename, True, proc_result.segmentor_concept, seg_preproc))
 
-                segment_count = len(proc_results)
                 full_msg = "+full" if (add_full_image and post_id in posts_need_full) else ""
-                print(f"[{i+1}/{total}] {character_name}: {segment_count} segments{full_msg}")
+                print(f"[{i+1}/{total}] {character_name}: {len(proc_results)} segments{full_msg}")
             else:
                 print(f"[{i+1}/{total}] {character_name}: full only")
 
-            if (i + 1) % save_interval == 0:
-                self.index.save(backup=True)
-                print(f"  Index saved ({self.index.size} embeddings)")
+            if len(pending_embeddings) >= batch_size:
+                flush_batch()
 
-        self.index.save(backup=True)
-        print(f"Final index saved ({self.index.size} embeddings), {added_count} added")
+        flush_batch()
+
+        print(f"Ingestion complete: {added_count} embeddings added (index: {self.index.size})")
         return added_count
-
-    def _add_single_embedding(
-        self,
-        embedding: np.ndarray,
-        post_id: str,
-        character_name: str,
-        bbox: tuple[int, int, int, int],
-        confidence: float,
-        segmentor_model: Optional[str] = None,
-        source_filename: Optional[str] = None,
-        source_url: Optional[str] = None,
-        is_cropped: bool = False,
-        segmentation_concept: Optional[str] = None,
-        preprocessing_info: Optional[str] = None,
-    ):
-        embedding_id = self.index.add(embedding.reshape(1, -1))
-        if segmentor_model is None:
-            segmentor_model = self.pipeline.segmentor_model_name
-
-        detection = Detection(
-            id=None,
-            post_id=post_id,
-            character_name=character_name,
-            embedding_id=embedding_id,
-            bbox_x=bbox[0],
-            bbox_y=bbox[1],
-            bbox_width=bbox[2],
-            bbox_height=bbox[3],
-            confidence=confidence,
-            segmentor_model=segmentor_model,
-            source_filename=source_filename,
-            source_url=source_url,
-            is_cropped=is_cropped,
-            segmentation_concept=segmentation_concept,
-            preprocessing_info=preprocessing_info,
-        )
-        try:
-            self.db.add_detection(detection)
-        except sqlite3.IntegrityError as e:
-            print(f"Warning: skipping duplicate embedding_id {embedding_id} for {post_id}: {e}")
 
     def _load_image(self, img_path: str) -> Image.Image:
         if img_path.startswith(('http://', 'https://')):

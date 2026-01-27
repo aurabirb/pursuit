@@ -10,7 +10,7 @@ from sam3_pursuit.config import Config
 
 
 def retry_on_locked(max_retries: int = 8, base_delay: float = 0.2):
-    """Decorator to retry database operations on lock errors with exponential backoff."""
+    """Retry on 'database is locked' with exponential backoff."""
     def decorator(func):
         @wraps(func)
         def wrapper(*args, **kwargs):
@@ -21,9 +21,7 @@ def retry_on_locked(max_retries: int = 8, base_delay: float = 0.2):
                 except sqlite3.OperationalError as e:
                     if "database is locked" in str(e):
                         last_error = e
-                        # Exponential backoff: 0.2, 0.4, 0.8, 1.6, 3.2, 6.4, 12.8, 25.6 = ~51s total
-                        delay = base_delay * (2 ** attempt)
-                        time.sleep(delay)
+                        time.sleep(base_delay * (2 ** attempt))
                     else:
                         raise
             raise last_error
@@ -77,9 +75,7 @@ class Database:
         source_filename, source_url, is_cropped, segmentation_concept,
         preprocessing_info, crop_path, git_version
     """
-    # Timeout in seconds to wait for database lock (Python level)
     _TIMEOUT = 10.0
-    # SQLite busy timeout in milliseconds
     _BUSY_TIMEOUT_MS = 15000
 
     def __init__(self, db_path: str = Config.DB_PATH):
@@ -88,15 +84,12 @@ class Database:
         self._init_database()
 
     def _connect(self) -> sqlite3.Connection:
-        """Get or create a persistent connection."""
         if self._conn is None:
             self._conn = sqlite3.connect(self.db_path, timeout=self._TIMEOUT)
-            # Set SQLite-level busy timeout for better lock handling
             self._conn.execute(f"PRAGMA busy_timeout = {self._BUSY_TIMEOUT_MS}")
         return self._conn
 
     def close(self):
-        """Close the persistent connection."""
         if self._conn is not None:
             self._conn.close()
             self._conn = None
@@ -104,10 +97,7 @@ class Database:
     def _init_database(self):
         conn = self._connect()
         c = conn.cursor()
-
-        # Enable WAL mode for better write concurrency
         c.execute("PRAGMA journal_mode=WAL")
-
         c.execute("""
             CREATE TABLE IF NOT EXISTS detections (
                 id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -129,16 +119,13 @@ class Database:
                 crop_path TEXT
             )
         """)
-
         c.execute("CREATE INDEX IF NOT EXISTS idx_post_id ON detections(post_id)")
         c.execute("CREATE INDEX IF NOT EXISTS idx_character_name ON detections(character_name)")
         c.execute("CREATE INDEX IF NOT EXISTS idx_embedding_id ON detections(embedding_id)")
         c.execute("CREATE INDEX IF NOT EXISTS idx_post_preproc ON detections(post_id, preprocessing_info)")
 
-        # Add missing columns for existing databases
         c.execute("PRAGMA table_info(detections)")
         existing_columns = {row[1] for row in c.fetchall()}
-
         new_columns = [
             ("source_filename", "TEXT"),
             ("source_url", "TEXT"),
@@ -148,46 +135,44 @@ class Database:
             ("crop_path", "TEXT"),
             ("git_version", "TEXT"),
         ]
-
         for col_name, col_type in new_columns:
             if col_name not in existing_columns:
                 c.execute(f"ALTER TABLE detections ADD COLUMN {col_name} {col_type}")
-
         conn.commit()
+
+    _INSERT_SQL = """
+        INSERT INTO detections
+        (post_id, character_name, embedding_id, bbox_x, bbox_y, bbox_width, bbox_height,
+         confidence, segmentor_model, source_filename, source_url, is_cropped,
+         segmentation_concept, preprocessing_info, crop_path, git_version)
+        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+    """
+
+    def _detection_to_tuple(self, d: Detection) -> tuple:
+        return (
+            d.post_id, d.character_name, d.embedding_id,
+            d.bbox_x, d.bbox_y, d.bbox_width, d.bbox_height,
+            d.confidence, d.segmentor_model, d.source_filename, d.source_url,
+            1 if d.is_cropped else 0, d.segmentation_concept,
+            d.preprocessing_info, d.crop_path, d.git_version or get_git_version(),
+        )
+
+    @retry_on_locked()
+    def add_detections_batch(self, detections: list[Detection]) -> list[int]:
+        if not detections:
+            return []
+        conn = self._connect()
+        c = conn.cursor()
+        row_ids = []
+        for d in detections:
+            c.execute(self._INSERT_SQL, self._detection_to_tuple(d))
+            row_ids.append(c.lastrowid)
+        conn.commit()
+        return row_ids
 
     @retry_on_locked()
     def add_detection(self, detection: Detection) -> int:
-        conn = self._connect()
-        c = conn.cursor()
-
-        c.execute("""
-            INSERT INTO detections
-            (post_id, character_name, embedding_id, bbox_x, bbox_y, bbox_width, bbox_height,
-             confidence, segmentor_model, source_filename, source_url, is_cropped,
-             segmentation_concept, preprocessing_info, crop_path, git_version)
-            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
-        """, (
-            detection.post_id,
-            detection.character_name,
-            detection.embedding_id,
-            detection.bbox_x,
-            detection.bbox_y,
-            detection.bbox_width,
-            detection.bbox_height,
-            detection.confidence,
-            detection.segmentor_model,
-            detection.source_filename,
-            detection.source_url,
-            1 if detection.is_cropped else 0,
-            detection.segmentation_concept,
-            detection.preprocessing_info,
-            detection.crop_path,
-            detection.git_version or get_git_version(),
-        ))
-
-        row_id = c.lastrowid
-        conn.commit()
-        return row_id
+        return self.add_detections_batch([detection])[0]
 
     def _row_to_detection(self, row) -> Detection:
         return Detection(
@@ -306,18 +291,14 @@ class Database:
         """Return post_ids that don't have an entry with this preprocessing_info."""
         if not post_ids or not preprocessing_info:
             return set(post_ids)
-
         conn = self._connect()
         c = conn.cursor()
-
         placeholders = ",".join("?" * len(post_ids))
         c.execute(
             f"SELECT DISTINCT post_id FROM detections WHERE post_id IN ({placeholders}) AND preprocessing_info = ?",
             (*post_ids, preprocessing_info)
         )
-        existing = {row[0] for row in c.fetchall()}
-
-        return set(post_ids) - existing
+        return set(post_ids) - {row[0] for row in c.fetchall()}
 
     @retry_on_locked()
     def get_next_embedding_id(self) -> int:
@@ -329,16 +310,10 @@ class Database:
 
     @retry_on_locked()
     def delete_orphaned_detections(self, max_valid_embedding_id: int) -> int:
-        """Delete detections with embedding_id > max_valid_embedding_id.
-
-        Returns the number of deleted rows.
-        """
+        """Delete detections with embedding_id > max_valid_embedding_id."""
         conn = self._connect()
         c = conn.cursor()
-        c.execute(
-            "DELETE FROM detections WHERE embedding_id > ?",
-            (max_valid_embedding_id,)
-        )
+        c.execute("DELETE FROM detections WHERE embedding_id > ?", (max_valid_embedding_id,))
         deleted = c.rowcount
         conn.commit()
         return deleted

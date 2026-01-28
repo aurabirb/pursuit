@@ -1,5 +1,6 @@
 """Telegram bot for fursuit character identification using SAM3 system."""
 
+import asyncio
 import os
 import re
 import sys
@@ -15,6 +16,18 @@ from telegram.ext import (
     MessageHandler,
     filters,
 )
+
+# AI tool configuration (from environment variables with baked-in defaults)
+AITOOL_WORK_DIR = os.environ.get("AITOOL_WORK_DIR", os.path.abspath(os.path.join(os.path.dirname(__file__), "../../pursuit")))
+AITOOL_BINARY = os.environ.get("AITOOL_BINARY", "claude")
+AITOOL_ARGS = os.environ.get("AITOOL_ARGS", "--allowedTools 'Bash(git:*) Edit Write Read Glob Grep' -p")
+AITOOL_TIMEOUT = int(os.environ.get("AITOOL_TIMEOUT", "300"))  # 5 minutes default
+AITOOL_POST_COMMAND = os.environ.get(
+    "AITOOL_POST_COMMAND",
+    f"pkill -f 'python.*{AITOOL_WORK_DIR}.*tgbot.py' ; cd {AITOOL_WORK_DIR} && . .venv/bin/activate && nohup python tgbot.py > /dev/null 2>&1 &"
+)
+AITOOL_UPDATE_INTERVAL = float(os.environ.get("AITOOL_UPDATE_INTERVAL", "5.0"))  # seconds between updates
+AITOOL_ALLOWED_USERS = os.environ.get("AITOOL_ALLOWED_USERS", "")  # comma-separated list of telegram user IDs or usernames
 
 from sam3_pursuit import SAM3FursuitIdentifier, Config
 
@@ -195,6 +208,236 @@ async def stats(update: Update, context: ContextTypes.DEFAULT_TYPE):
         )
 
 
+def is_user_authorized(update: Update) -> bool:
+    """Check if the user is authorized to use /aitool."""
+    if not AITOOL_ALLOWED_USERS:
+        return False  # No users configured = no access
+
+    allowed = [u.strip().lower() for u in AITOOL_ALLOWED_USERS.split(",") if u.strip()]
+    user = update.effective_user
+    if not user:
+        return False
+
+    # Check by user ID or username
+    user_id_str = str(user.id)
+    username = (user.username or "").lower()
+
+    return user_id_str in allowed or username in allowed
+
+
+async def aitool(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """Handle /aitool command - run AI tool with prompt and stream output.
+
+    Usage:
+        /aitool <prompt>       - Continue previous conversation with prompt
+        /aitool new <prompt>   - Start a new conversation with prompt
+    """
+    chat_id = update.effective_chat.id
+
+    # Check authorization
+    if not is_user_authorized(update):
+        await context.bot.send_message(
+            chat_id=chat_id,
+            text="❌ You are not authorized to use this command."
+        )
+        return
+
+    if not update.message or not context.args:
+        await context.bot.send_message(
+            chat_id=chat_id,
+            text="Usage:\n  /aitool <prompt> - continue conversation\n  /aitool new <prompt> - start new conversation\n\nExample: /aitool fix the bug in main.py"
+        )
+        return
+
+    # Check for 'new' subcommand
+    args = list(context.args)
+    use_continue = True
+    if args and args[0].lower() == "new":
+        use_continue = False
+        args = args[1:]
+
+    if not args:
+        await context.bot.send_message(
+            chat_id=chat_id,
+            text="❌ Please provide a prompt after 'new'."
+        )
+        return
+
+    prompt = " ".join(args)
+
+    # Send initial status
+    mode = "continuing" if use_continue else "new conversation"
+    status_msg = await context.bot.send_message(
+        chat_id=chat_id,
+        text=f"🔧 Running: {AITOOL_BINARY} ({mode})\nPrompt: {prompt[:100]}{'...' if len(prompt) > 100 else ''}\n\n⏳ Starting..."
+    )
+
+    # Build command: claude --allowedTools '...' -p [-c] "prompt"
+    import shlex
+    cmd_parts = [AITOOL_BINARY] + shlex.split(AITOOL_ARGS)
+    if use_continue:
+        cmd_parts.append("-c")
+    cmd_parts.append(prompt)
+
+    work_dir = AITOOL_WORK_DIR if AITOOL_WORK_DIR else None
+
+    output_buffer = []
+    last_update_time = 0
+    process = None
+
+    try:
+        # Start the process
+        process = await asyncio.create_subprocess_exec(
+            *cmd_parts,
+            stdout=asyncio.subprocess.PIPE,
+            stderr=asyncio.subprocess.STDOUT,
+            cwd=work_dir,
+        )
+
+        async def read_output():
+            """Read output from process and update buffer."""
+            nonlocal last_update_time
+            while True:
+                try:
+                    line = await asyncio.wait_for(
+                        process.stdout.readline(),
+                        timeout=1.0
+                    )
+                    if not line:
+                        break
+                    decoded = line.decode('utf-8', errors='replace').rstrip()
+                    if decoded:
+                        output_buffer.append(decoded)
+                except asyncio.TimeoutError:
+                    continue
+
+        async def send_updates():
+            """Periodically send output updates to user."""
+            nonlocal last_update_time
+            last_sent_len = 0
+            while process.returncode is None:
+                await asyncio.sleep(AITOOL_UPDATE_INTERVAL)
+                if len(output_buffer) > last_sent_len:
+                    # Get new lines since last update
+                    new_lines = output_buffer[last_sent_len:]
+                    last_sent_len = len(output_buffer)
+
+                    # Truncate if too long for Telegram (4096 char limit)
+                    text = "\n".join(new_lines)
+                    if len(text) > 3900:
+                        text = text[-3900:]
+                        text = "...(truncated)\n" + text
+
+                    try:
+                        await context.bot.send_message(chat_id=chat_id, text=f"📤 Output:\n```\n{text}\n```", parse_mode="Markdown")
+                    except Exception as e:
+                        # Fallback without markdown if it fails
+                        try:
+                            await context.bot.send_message(chat_id=chat_id, text=f"📤 Output:\n{text}")
+                        except Exception:
+                            pass
+
+        # Run both tasks with timeout
+        try:
+            read_task = asyncio.create_task(read_output())
+            update_task = asyncio.create_task(send_updates())
+
+            await asyncio.wait_for(read_task, timeout=AITOOL_TIMEOUT)
+            update_task.cancel()
+
+        except asyncio.TimeoutError:
+            await context.bot.send_message(
+                chat_id=chat_id,
+                text=f"⚠️ Timeout after {AITOOL_TIMEOUT}s - terminating process..."
+            )
+            process.terminate()
+            try:
+                await asyncio.wait_for(process.wait(), timeout=5)
+            except asyncio.TimeoutError:
+                process.kill()
+
+        # Wait for process to complete
+        await process.wait()
+        return_code = process.returncode
+
+        # Send final output
+        if output_buffer:
+            final_output = "\n".join(output_buffer[-50:])  # Last 50 lines
+            if len(output_buffer) > 50:
+                final_output = f"...(showing last 50 of {len(output_buffer)} lines)\n" + final_output
+            if len(final_output) > 3900:
+                final_output = final_output[-3900:]
+
+            await context.bot.send_message(
+                chat_id=chat_id,
+                text=f"✅ Completed (exit code: {return_code})\n\n📄 Final output:\n```\n{final_output}\n```",
+                parse_mode="Markdown"
+            )
+        else:
+            await context.bot.send_message(
+                chat_id=chat_id,
+                text=f"✅ Completed (exit code: {return_code})\n\n(no output)"
+            )
+
+        # Run post-command if configured
+        if AITOOL_POST_COMMAND:
+            await context.bot.send_message(
+                chat_id=chat_id,
+                text=f"🔄 Running post-command..."
+            )
+
+            try:
+                post_process = await asyncio.create_subprocess_shell(
+                    AITOOL_POST_COMMAND,
+                    stdout=asyncio.subprocess.PIPE,
+                    stderr=asyncio.subprocess.STDOUT,
+                    cwd=work_dir,
+                )
+
+                post_output, _ = await asyncio.wait_for(
+                    post_process.communicate(),
+                    timeout=60  # 1 minute timeout for post-command
+                )
+
+                post_text = post_output.decode('utf-8', errors='replace').strip()
+                if len(post_text) > 3900:
+                    post_text = post_text[-3900:]
+
+                await context.bot.send_message(
+                    chat_id=chat_id,
+                    text=f"📋 Post-command (exit: {post_process.returncode}):\n```\n{post_text or '(no output)'}\n```",
+                    parse_mode="Markdown"
+                )
+
+            except asyncio.TimeoutError:
+                await context.bot.send_message(
+                    chat_id=chat_id,
+                    text="⚠️ Post-command timed out"
+                )
+            except Exception as e:
+                await context.bot.send_message(
+                    chat_id=chat_id,
+                    text=f"❌ Post-command error: {e}"
+                )
+
+    except FileNotFoundError:
+        await context.bot.send_message(
+            chat_id=chat_id,
+            text=f"❌ Error: Binary '{AITOOL_BINARY}' not found. Make sure it's installed and in PATH."
+        )
+    except Exception as e:
+        await context.bot.send_message(
+            chat_id=chat_id,
+            text=f"❌ Error: {e}"
+        )
+    finally:
+        if process and process.returncode is None:
+            try:
+                process.kill()
+            except Exception:
+                pass
+
+
 if __name__ == "__main__":
     load_dotenv()
     token = os.environ.get("TG_BOT_TOKEN", "")
@@ -209,6 +452,13 @@ if __name__ == "__main__":
     application.add_handler(MessageHandler((~filters.COMMAND) & filters.PHOTO, photo))
     application.add_handler(CommandHandler("start", start))
     application.add_handler(CommandHandler("stats", stats))
+    application.add_handler(CommandHandler("aitool", aitool))
 
     print("Bot running...")
+    print(f"AI tool config: binary={AITOOL_BINARY}, timeout={AITOOL_TIMEOUT}s")
+    print(f"  args: {AITOOL_ARGS}")
+    print(f"  work_dir: {AITOOL_WORK_DIR}")
+    print(f"  allowed_users: {AITOOL_ALLOWED_USERS or '(none - /aitool disabled)'}")
+    if AITOOL_POST_COMMAND:
+        print(f"  post_command: {AITOOL_POST_COMMAND[:80]}...")
     application.run_polling()

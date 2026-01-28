@@ -61,19 +61,23 @@ async def photo(update: Update, context: ContextTypes.DEFAULT_TYPE):
     else:
         await identify_photo(update, context)
 
+async def download_tg_file(new_file):
+    from pathlib import Path
+    os.makedirs("tg_download", exist_ok=True)
+    temp_path = Path("tg_download") / f"{new_file.file_id}.jpg"
+    print(f"Downloading into {temp_path}")
+    with open(temp_path, 'wb') as f:
+        bs = await new_file.download_as_bytearray()
+        f.write(bs)
+        f.flush()
+    return temp_path
 
 async def add_photo(update: Update, context: ContextTypes.DEFAULT_TYPE, character_name: str):
     """Add a photo to the database for a character."""
     attachment = update.message.effective_attachment
     new_file = await attachment[-1].get_file()
-
     try:
-        with NamedTemporaryFile(delete=False, suffix=".jpg") as f:
-            bs = await new_file.download_as_bytearray()
-            f.write(bs)
-            f.flush()
-            temp_path = f.name
-
+        temp_path = await download_tg_file(new_file)
         identifier = get_identifier()
         added = identifier.add_images(
             character_names=[character_name],
@@ -83,7 +87,7 @@ async def add_photo(update: Update, context: ContextTypes.DEFAULT_TYPE, characte
         )
 
         # Clean up temp file
-        os.unlink(temp_path)
+        # os.unlink(temp_path)
 
         if added > 0:
             await context.bot.send_message(
@@ -110,16 +114,12 @@ async def identify_photo(update: Update, context: ContextTypes.DEFAULT_TYPE):
     new_file = await attachment[-1].get_file()
 
     try:
-        # Download and process the image
-        with NamedTemporaryFile(delete=True, suffix=".jpg") as f:
-            bs = await new_file.download_as_bytearray()
-            f.write(bs)
-            f.flush()
+        temp_path = await download_tg_file(new_file)
 
-            # Load image and identify
-            image = Image.open(f.name)
-            identifier = get_identifier()
-            results = identifier.identify(image, top_k=5)
+        # Load image and identify
+        image = Image.open(temp_path)
+        identifier = get_identifier()
+        results = identifier.identify(image, top_k=5)
 
         if not results:
             await context.bot.send_message(
@@ -176,14 +176,16 @@ async def stats(update: Update, context: ContextTypes.DEFAULT_TYPE):
     try:
         identifier = get_identifier()
         stats = identifier.get_stats()
+        import yaml
+        msg = yaml.safe_dump(stats)
 
-        msg = (
-            f"Database Statistics:\n"
-            f"- Total detections: {stats['total_detections']}\n"
-            f"- Unique characters: {stats['unique_characters']}\n"
-            f"- Unique posts: {stats['unique_posts']}\n"
-            f"- Index size: {stats['index_size']}"
-        )
+        # msg = (
+        #     f"Database Statistics:\n"
+        #     f"- Total detections: {stats['total_detections']}\n"
+        #     f"- Unique characters: {stats['unique_characters']}\n"
+        #     f"- Unique posts: {stats['unique_posts']}\n"
+        #     f"- Index size: {stats['index_size']}"
+        # )
         await context.bot.send_message(chat_id=update.effective_chat.id, text=msg)
 
     except Exception as e:

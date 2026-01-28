@@ -13,6 +13,7 @@ __pycache__/
 
 # Database and index files
 *.db
+*.db-*
 *.index
 
 # Downloaded data
@@ -21,6 +22,7 @@ furtrack_images/
 embeddings/
 runs/
 pursuit_crops/
+tg_download/
 
 # Backups
 *.bak

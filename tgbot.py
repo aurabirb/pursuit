@@ -205,7 +205,6 @@ async def stats(update: Update, context: ContextTypes.DEFAULT_TYPE):
         )
 
 
-<<<<<<< HEAD
 def is_user_authorized(update: Update) -> bool:
     """Check if the user is authorized to use /aitool."""
     if not AITOOL_ALLOWED_USERS:

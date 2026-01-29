@@ -130,7 +130,7 @@ def annotate_image(image: Image.Image, results: list, min_confidence: float) -> 
         text_h = text_bbox[3] - text_bbox[1]
         label_y = max(0, y - text_h - 8)
         draw.rectangle([x, label_y, x + text_w + 12, label_y + text_h + 6], fill=color)
-        draw.text((x + 6, label_y + 3), label, fill="black", font=font)
+        draw.text((x + 6, label_y + 3), label, fill="white", font=font)
 
     # Draw watermark text centered in the black bar
     wm_bbox = draw.textbbox((0, 0), watermark_text, font=watermark_font)
@@ -274,13 +274,16 @@ async def identify_photo(update: Update, context: ContextTypes.DEFAULT_TYPE):
         msg = "\n".join(lines)
         print(msg)
 
-        # Send annotated image with text caption
+        # Send annotated image, then text as separate message
         with open(temp_annotated_path, 'rb') as photo_file:
             await context.bot.send_photo(
                 chat_id=update.effective_chat.id,
-                photo=photo_file,
-                caption=msg
+                photo=photo_file
             )
+        await context.bot.send_message(
+            chat_id=update.effective_chat.id,
+            text=msg
+        )
 
         # Clean up temp annotated file
         os.unlink(temp_annotated_path)

@@ -502,6 +502,4 @@ if __name__ == "__main__":
     print(f"  args: {AITOOL_ARGS}")
     print(f"  work_dir: {AITOOL_WORK_DIR}")
     print(f"  allowed_users: {AITOOL_ALLOWED_USERS or '(none - /aitool disabled)'}")
-    if AITOOL_POST_COMMAND:
-        print(f"  post_command: {AITOOL_POST_COMMAND[:80]}...")
     application.run_polling()

@@ -23,10 +23,6 @@ AITOOL_WORK_DIR = os.environ.get("AITOOL_WORK_DIR", os.path.abspath(os.path.join
 AITOOL_BINARY = os.environ.get("AITOOL_BINARY", "claude")
 AITOOL_ARGS = os.environ.get("AITOOL_ARGS", "--allowedTools 'Bash(git:*) Edit Write Read Glob Grep' -p")
 AITOOL_TIMEOUT = int(os.environ.get("AITOOL_TIMEOUT", "600"))  # 10 minutes default
-AITOOL_POST_COMMAND = os.environ.get(
-    "AITOOL_POST_COMMAND",
-    f"pkill -f 'python.*{AITOOL_WORK_DIR}.*tgbot.py' ; cd {AITOOL_WORK_DIR} && . .venv/bin/activate && nohup python tgbot.py > /dev/null 2>&1 &"
-)
 AITOOL_UPDATE_INTERVAL = float(os.environ.get("AITOOL_UPDATE_INTERVAL", "5.0"))  # seconds between updates
 AITOOL_ALLOWED_USERS = os.environ.get("AITOOL_ALLOWED_USERS", "")  # comma-separated list of telegram user IDs or usernames
 
@@ -209,6 +205,7 @@ async def stats(update: Update, context: ContextTypes.DEFAULT_TYPE):
         )
 
 
+<<<<<<< HEAD
 def is_user_authorized(update: Update) -> bool:
     """Check if the user is authorized to use /aitool."""
     if not AITOOL_ALLOWED_USERS:
@@ -382,48 +379,6 @@ async def aitool(update: Update, context: ContextTypes.DEFAULT_TYPE):
                 text=f"✅ Completed (exit code: {return_code})\n\n(no output)"
             )
 
-        # Run post-command if configured
-        if AITOOL_POST_COMMAND:
-            await context.bot.send_message(
-                chat_id=chat_id,
-                text=f"🔄 Running post-command..."
-            )
-
-            try:
-                print(f"Running command: {AITOOL_POST_COMMAND}")
-                post_process = await asyncio.create_subprocess_shell(
-                    AITOOL_POST_COMMAND,
-                    stdout=asyncio.subprocess.PIPE,
-                    stderr=asyncio.subprocess.STDOUT,
-                    cwd=work_dir,
-                )
-
-                post_output, _ = await asyncio.wait_for(
-                    post_process.communicate(),
-                    timeout=60  # 1 minute timeout for post-command
-                )
-
-                post_text = post_output.decode('utf-8', errors='replace').strip()
-                if len(post_text) > 3900:
-                    post_text = post_text[-3900:]
-
-                await context.bot.send_message(
-                    chat_id=chat_id,
-                    text=f"📋 Post-command (exit: {post_process.returncode}):\n```\n{post_text or '(no output)'}\n```",
-                    parse_mode="Markdown"
-                )
-
-            except asyncio.TimeoutError:
-                await context.bot.send_message(
-                    chat_id=chat_id,
-                    text="⚠️ Post-command timed out"
-                )
-            except Exception as e:
-                await context.bot.send_message(
-                    chat_id=chat_id,
-                    text=f"❌ Post-command error: {e}"
-                )
-
     except FileNotFoundError:
         await context.bot.send_message(
             chat_id=chat_id,
@@ -441,6 +396,90 @@ async def aitool(update: Update, context: ContextTypes.DEFAULT_TYPE):
             except Exception:
                 pass
 
+async def restart(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """Handle /restart command - restart the bot process."""
+    await context.bot.send_message(
+        chat_id=update.effective_chat.id,
+        text="Restarting bot..."
+    )
+
+    # Stop the application gracefully
+    context.application.stop_running()
+
+    # Replace current process with a new instance
+    os.execv(sys.executable, [sys.executable] + sys.argv)
+
+
+async def commit(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """Handle /commit command - git add, commit and push changes."""
+    import subprocess
+
+    # Get commit message from command arguments, or use default
+    commit_msg = " ".join(context.args) if context.args else "Update from bot"
+
+    try:
+        # Get the working directory (where tgbot.py is located)
+        working_dir = os.path.dirname(os.path.abspath(__file__)) or "."
+
+        # Git add all changes
+        result = subprocess.run(
+            ["git", "add", "-A"],
+            cwd=working_dir,
+            capture_output=True,
+            text=True
+        )
+        if result.returncode != 0:
+            await context.bot.send_message(
+                chat_id=update.effective_chat.id,
+                text=f"git add failed: {result.stderr}"
+            )
+            return
+
+        # Git commit
+        result = subprocess.run(
+            ["git", "commit", "-m", commit_msg],
+            cwd=working_dir,
+            capture_output=True,
+            text=True
+        )
+        if result.returncode != 0:
+            if "nothing to commit" in result.stdout or "nothing to commit" in result.stderr:
+                await context.bot.send_message(
+                    chat_id=update.effective_chat.id,
+                    text="Nothing to commit."
+                )
+                return
+            await context.bot.send_message(
+                chat_id=update.effective_chat.id,
+                text=f"git commit failed: {result.stderr}"
+            )
+            return
+
+        # Git push
+        result = subprocess.run(
+            ["git", "push"],
+            cwd=working_dir,
+            capture_output=True,
+            text=True
+        )
+        if result.returncode != 0:
+            await context.bot.send_message(
+                chat_id=update.effective_chat.id,
+                text=f"git push failed: {result.stderr}"
+            )
+            return
+
+        await context.bot.send_message(
+            chat_id=update.effective_chat.id,
+            text=f"Changes committed and pushed.\nMessage: {commit_msg}"
+        )
+
+    except Exception as e:
+        await context.bot.send_message(
+            chat_id=update.effective_chat.id,
+            text=f"Error: {e}"
+        )
+
 
 if __name__ == "__main__":
     token = os.environ.get("TG_BOT_TOKEN", "")
@@ -456,6 +495,8 @@ if __name__ == "__main__":
     application.add_handler(CommandHandler("start", start))
     application.add_handler(CommandHandler("stats", stats))
     application.add_handler(CommandHandler("aitool", aitool))
+    application.add_handler(CommandHandler("restart", restart))
+    application.add_handler(CommandHandler("commit", commit))
 
     print("Bot running...")
     print(f"AI tool config: binary={AITOOL_BINARY}, timeout={AITOOL_TIMEOUT}s")

@@ -53,7 +53,7 @@ Examples:
     identify_parser.add_argument("image", help="Path to image file")
     identify_parser.add_argument("--top-k", "-k", type=int, default=5, help="Number of results")
     identify_parser.add_argument("--min-confidence", "-m", type=float, default=Config.DEFAULT_MIN_CONFIDENCE,
-                                 help=f"Minimum confidence threshold (default: {Config.DEFAULT_MIN_CONFIDENCE:.0%})")
+                                 help=f"Minimum confidence threshold.")
     identify_parser.add_argument("--save-crops", action="store_true", help="Save preprocessed crops for debugging")
 
     add_parser = subparsers.add_parser("add", help="Add images for a character")

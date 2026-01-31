@@ -253,6 +253,7 @@ class SAM3FursuitIdentifier:
         return added_count
 
     def _load_image(self, img_path: str) -> Image.Image:
+        img_path = str(img_path)
         if img_path.startswith(('http://', 'https://')):
             response = requests.get(img_path, timeout=10)
             response.raise_for_status()

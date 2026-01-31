@@ -23,6 +23,7 @@ embeddings/
 runs/
 pursuit_crops/
 tg_download/
+static/models/
 
 # Backups
 *.bak

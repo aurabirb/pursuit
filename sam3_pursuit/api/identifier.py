@@ -112,12 +112,7 @@ class SAM3FursuitIdentifier:
         segment_results = []
         for i, proc_result in enumerate(proc_results):
             if save_crops and proc_result.isolated_crop:
-                self._save_debug_crop(
-                    proc_result.isolated_crop,
-                    f"{crop_prefix}_{i}",
-                    search=True,
-                    mask=proc_result.segmentation.crop_mask,
-                )
+                self._save_debug_crop(proc_result.isolated_crop, f"{crop_prefix}_{i}", source="search")
             matches = self._search_embedding(proc_result.embedding, top_k)
             segment_results.append(SegmentResults(
                 segment_index=i,
@@ -132,21 +127,13 @@ class SAM3FursuitIdentifier:
         self,
         image: Image.Image,
         name: str,
-        search: bool = True,
-        mask: Optional[np.ndarray] = None,
         source: Optional[str] = None,
     ) -> None:
-        """Save crop image and optionally its mask for debugging."""
-        base = Path(Config.CROPS_SEARCH_DIR if search else Config.CROPS_INGEST_DIR)
-        crops_dir = base / (source or "unknown")
+        """Save crop image for debugging (optional, use --save-crops)."""
+        crops_dir = Path(Config.CROPS_INGEST_DIR) / (source or "unknown")
         crops_dir.mkdir(parents=True, exist_ok=True)
         crop_path = crops_dir / f"{name}.jpg"
-        print(f"Saving debug crop to {crop_path}")
         image.convert("RGB").save(crop_path, quality=90)
-
-        if mask is not None:
-            mask_path = self.mask_storage.save_mask(mask, name, search=search, source=source)
-            print(f"Saving mask to {mask_path}")
 
     def _search_embedding(self, embedding: np.ndarray, top_k: int) -> list[IdentificationResult]:
         distances, indices = self.index.search(embedding, top_k * 2)
@@ -250,10 +237,16 @@ class SAM3FursuitIdentifier:
             if post_id in posts_need_seg:
                 proc_results = self.pipeline.process(image)
                 for j, proc_result in enumerate(proc_results):
+                    seg_name = f"{post_id}_seg_{j}"
+                    # Always save mask for potential reprocessing
+                    if proc_result.segmentation.crop_mask is not None:
+                        self.mask_storage.save_mask(
+                            proc_result.segmentation.crop_mask, seg_name,
+                            source=source or "unknown",
+                            model=proc_result.segmentor_model,
+                            concept=proc_result.segmentor_concept or "")
                     if save_crops and proc_result.isolated_crop:
-                        self._save_debug_crop(
-                            proc_result.isolated_crop, f"{post_id}_seg_{j}",
-                            search=False, mask=proc_result.segmentation.crop_mask, source=source)
+                        self._save_debug_crop(proc_result.isolated_crop, seg_name, source=source)
                     pending_embeddings.append(proc_result.embedding.reshape(1, -1))
                     pending_detections.append(make_detection(
                         post_id, character_name, proc_result.segmentation.bbox,

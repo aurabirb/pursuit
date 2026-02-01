@@ -100,6 +100,13 @@ pursuit segment photo.jpg
 pursuit segment photo.jpg --output-dir ./crops/ --json
 ```
 
+### Download images from FurTrack
+
+```bash
+pursuit download furtrack --character "CharacterName"
+pursuit download furtrack --all --max-images 5
+```
+
 ### View database entries
 
 ```bash
@@ -254,15 +261,9 @@ pursuit ingest directory --data-dir ./characters/ --source manual
 
 ### Option 3: Download from FurTrack
 
-Download images using the FurTrack tool, then organize into directory structure and ingest:
-
 ```bash
-# Download images
-python tools/download_furtrack.py --download-characters
-
-# Organize downloaded images into characters/CharacterName/*.jpg structure
-# Then ingest as a directory, tagging as furtrack source
-pursuit ingest directory --data-dir ./characters/ --source furtrack
+pursuit download furtrack --all --max-images 5
+pursuit ingest directory --data-dir ./furtrack_images/ -s furtrack
 ```
 
 ### Option 4: Index NFC25 database

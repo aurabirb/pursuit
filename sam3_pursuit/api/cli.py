@@ -19,23 +19,10 @@ def main():
         formatter_class=argparse.RawDescriptionHelpFormatter,
         epilog="""
 Examples:
-  # Identify character in an image
   pursuit identify photo.jpg
-
-  # Identify with segmentation (for multi-character images)
-  pursuit identify photo.jpg
-  pursuit identify photo.jpg --no-segment
-
-  # Add images for a character (source: manual or furtrack)
-  pursuit add --character "CharacterName" --source manual image1.jpg image2.jpg
-
-  # View database entries for a character
-  pursuit show --by-character "CharacterName"
-
-  # Bulk ingest from a directory
-  pursuit ingest directory --data-dir ./characters/ --source manual
-
-  # Show statistics
+  pursuit add -c "CharName" -s manual img1.jpg img2.jpg
+  pursuit download furtrack --all
+  pursuit ingest directory --data-dir ./characters/ -s furtrack
   pursuit stats
         """
     )
@@ -90,6 +77,23 @@ Examples:
     stats_parser = subparsers.add_parser("stats", help="Show system statistics")
     stats_parser.add_argument("--json", action="store_true", help="Output as JSON")
 
+    segment_parser = subparsers.add_parser("segment", help="Test segmentation on an image")
+    segment_parser.add_argument("image", help="Path to image file")
+    segment_parser.add_argument("--output-dir", "-o", help="Output directory for crops")
+    segment_parser.add_argument("--json", action="store_true", help="Output as JSON")
+
+    download_parser = subparsers.add_parser("download", help="Download images from external sources")
+    download_subparsers = download_parser.add_subparsers(dest="source", help="Download source")
+
+    furtrack_parser = download_subparsers.add_parser("furtrack", help="Download from FurTrack")
+    furtrack_parser.add_argument("--character", "-c", help="Download specific character")
+    furtrack_parser.add_argument("--all", "-a", dest="download_all", action="store_true",
+                                  help="Download all characters")
+    furtrack_parser.add_argument("--max-images", "-m", type=int, default=2,
+                                  help="Max images per character (default: 2)")
+    furtrack_parser.add_argument("--output-dir", "-o", default="furtrack_images",
+                                  help="Output directory (default: furtrack_images)")
+
     args = parser.parse_args()
 
     if not args.command:
@@ -106,6 +110,10 @@ Examples:
         ingest_command(args)
     elif args.command == "stats":
         stats_command(args)
+    elif args.command == "segment":
+        segment_command(args)
+    elif args.command == "download":
+        download_command(args)
 
 
 def _get_isolation_config(args):
@@ -451,6 +459,55 @@ def stats_command(args):
             print("\nTop characters:")
             for name, count in stats['top_characters']:
                 print(f"  {name}: {count} images")
+
+
+def segment_command(args):
+    from sam3_pursuit.models.segmentor import FursuitSegmentor
+
+    image_path = Path(args.image)
+    if not image_path.exists():
+        print(f"Error: Image not found: {image_path}")
+        sys.exit(1)
+
+    concept = getattr(args, "concept", None) or Config.DEFAULT_CONCEPT
+    segmentor = FursuitSegmentor(concept=concept)
+    results = segmentor.segment(Image.open(image_path))
+
+    if args.output_dir:
+        output_dir = Path(args.output_dir)
+        output_dir.mkdir(parents=True, exist_ok=True)
+        for i, r in enumerate(results):
+            crop_path = output_dir / f"{image_path.stem}_crop_{i}.jpg"
+            r.crop.save(crop_path)
+            print(f"Saved: {crop_path}")
+
+    if args.json:
+        print(json.dumps([{"bbox": list(r.bbox), "confidence": r.confidence} for r in results], indent=2))
+    else:
+        print(f"Found {len(results)} segment(s)")
+        for i, r in enumerate(results):
+            print(f"  {i+1}: bbox={r.bbox}, conf={r.confidence:.0%}")
+
+
+def download_command(args):
+    """Handle download command."""
+    if args.source != "furtrack":
+        print("Error: Use 'pursuit download furtrack'")
+        sys.exit(1)
+
+    sys.path.insert(0, str(Path(__file__).parent.parent.parent / "tools"))
+    import download_furtrack
+    if args.output_dir:
+        download_furtrack.IMAGES_DIR = args.output_dir
+
+    if args.character:
+        count = download_furtrack.download_character(args.character, args.max_images)
+        print(f"Downloaded {count} images")
+    elif args.download_all:
+        download_furtrack.download_all_characters(args.max_images)
+    else:
+        print("Error: Specify --character or --all")
+        sys.exit(1)
 
 
 if __name__ == "__main__":

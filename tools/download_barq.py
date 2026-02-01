@@ -210,56 +210,62 @@ async def download_all_profiles(lat: float, lon: float, max_pages: int = 100, al
             print(f"Page {page + 1}: {len(profiles)} profiles")
 
             for p in profiles:
-                pid = p.get("id")
-                if not pid:
-                    continue
-
-                # Check cache age
-                age = get_profile_age_days(pid)
-                if age is not None and max_age and age < max_age:
-                    skipped += 1
-                    continue
-
-                # Save profile to cache
-                save_profile(p)
-
-                # Get image UUIDs
-                if all_images:
-                    img_uuids = [e.get("image", {}).get("uuid") for e in p.get("images") or []]
-                else:
-                    primary = p.get("primaryImage") or {}
-                    img_uuids = [primary.get("uuid")] if primary.get("uuid") else []
-
-                img_uuids = [u for u in img_uuids if u]
-                if not img_uuids:
-                    continue
-
-                folder_name = get_folder_name(p)
-                char_folder = Path(IMAGES_DIR) / folder_name
-                existing = get_existing_images(char_folder)
-
-                for img_uuid in img_uuids:
-                    if img_uuid in existing:
+                try:
+                    pid = p.get("id")
+                    if not pid:
                         continue
 
-                    char_folder.mkdir(parents=True, exist_ok=True)
-                    dest = char_folder / f"{img_uuid}.jpg"
+                    # Check cache age
+                    age = get_profile_age_days(pid)
+                    if age is not None and max_age and age < max_age:
+                        skipped += 1
+                        continue
 
-                    if await download_image(session, img_uuid, dest, semaphore):
-                        if classify_fn:
-                            from PIL import Image
-                            try:
-                                img = Image.open(dest)
-                                if not classify_fn(img):
-                                    dest.unlink()
-                                    print(f"  {folder_name}: {img_uuid}.jpg (filtered: not fursuit)")
-                                    filtered += 1
-                                    continue
-                            except Exception:
-                                pass
-                        print(f"  {folder_name}: {img_uuid}.jpg")
-                        total += 1
-                        existing.add(img_uuid)
+                    # Save profile to cache
+                    save_profile(p)
+
+                    # Get image UUIDs
+                    if all_images:
+                        img_uuids = [((e or {}).get("image") or {}).get("uuid") for e in p.get("images") or []]
+                    else:
+                        primary = p.get("primaryImage") or {}
+                        img_uuids = [primary.get("uuid")] if primary.get("uuid") else []
+
+                    img_uuids = [u for u in img_uuids if u]
+                    if not img_uuids:
+                        print(f"  {get_folder_name(p)}: no images")
+                        continue
+
+                    folder_name = get_folder_name(p)
+                    char_folder = Path(IMAGES_DIR) / folder_name
+                    existing = get_existing_images(char_folder)
+                    new_uuids = [u for u in img_uuids if u not in existing]
+
+                    if not new_uuids:
+                        print(f"  {folder_name}: up to date ({len(existing)} images)")
+                        continue
+
+                    for img_uuid in new_uuids:
+                        char_folder.mkdir(parents=True, exist_ok=True)
+                        dest = char_folder / f"{img_uuid}.jpg"
+
+                        if await download_image(session, img_uuid, dest, semaphore):
+                            if classify_fn:
+                                from PIL import Image
+                                try:
+                                    img = Image.open(dest)
+                                    if not classify_fn(img):
+                                        dest.unlink()
+                                        print(f"  {folder_name}: {img_uuid}.jpg (filtered: not fursuit)")
+                                        filtered += 1
+                                        continue
+                                except Exception:
+                                    pass
+                            print(f"  {folder_name}: {img_uuid}.jpg")
+                            total += 1
+                            existing.add(img_uuid)
+                except Exception as e:
+                    print(f"  Error processing profile {p.get('id', '?')}: {e}")
 
             if not cursor:
                 break

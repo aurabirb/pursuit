@@ -263,10 +263,7 @@ def show_command(args):
                 "source": d.source,
                 "uploaded_by": d.uploaded_by,
                 "source_filename": d.source_filename,
-                "source_url": d.source_url or get_source_url(d.source, d.post_id),
-                "is_cropped": d.is_cropped,
-                "segmentation_concept": d.segmentation_concept,
-                "crop_path": d.crop_path,
+                "url": get_source_url(d.source, d.post_id),
                 "created_at": str(d.created_at) if d.created_at else None,
             }
             for d in detections
@@ -288,17 +285,13 @@ def show_command(args):
                 print(f"  Uploaded by: {d.uploaded_by}")
             if d.source_filename:
                 print(f"  Filename: {d.source_filename}")
-            url = d.source_url or get_source_url(d.source, d.post_id)
+            url = get_source_url(d.source, d.post_id)
             if url:
                 print(f"  URL: {url}")
-            if d.segmentation_concept:
-                print(f"  Concept: {d.segmentation_concept}")
             if d.preprocessing_info:
                 print(f"  Preprocessing: {d.preprocessing_info}")
             if d.git_version:
                 print(f"  Git version: {d.git_version}")
-            if d.crop_path:
-                print(f"  Crop: {d.crop_path}")
             if d.created_at:
                 print(f"  Created: {d.created_at}")
             print()

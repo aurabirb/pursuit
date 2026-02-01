@@ -76,12 +76,7 @@ class Detection:
     source: Optional[str] = None
     uploaded_by: Optional[str] = None
     source_filename: Optional[str] = None
-    source_url: Optional[str] = None
-    is_cropped: bool = False
-    segmentation_concept: Optional[str] = None
     preprocessing_info: Optional[str] = None
-    crop_path: Optional[str] = None
-    mask_path: Optional[str] = None
     git_version: Optional[str] = None
 
 
@@ -89,8 +84,7 @@ class Database:
     _SELECT_FIELDS = """
         id, post_id, character_name, embedding_id, bbox_x, bbox_y,
         bbox_width, bbox_height, confidence, segmentor_model, created_at,
-        source, uploaded_by, source_filename, source_url, is_cropped,
-        segmentation_concept, preprocessing_info, crop_path, mask_path, git_version
+        source, uploaded_by, source_filename, preprocessing_info, git_version
     """
     _TIMEOUT = 10.0
     _BUSY_TIMEOUT_MS = 15000
@@ -129,12 +123,7 @@ class Database:
                 segmentor_model TEXT DEFAULT 'unknown',
                 created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
                 source_filename TEXT,
-                source_url TEXT,
-                is_cropped INTEGER DEFAULT 0,
-                segmentation_concept TEXT,
-                preprocessing_info TEXT,
-                crop_path TEXT,
-                mask_path TEXT
+                preprocessing_info TEXT
             )
         """)
         # Migrate columns first (before creating indexes that depend on them)
@@ -144,12 +133,7 @@ class Database:
             ("source", "TEXT"),
             ("uploaded_by", "TEXT"),
             ("source_filename", "TEXT"),
-            ("source_url", "TEXT"),
-            ("is_cropped", "INTEGER DEFAULT 0"),
-            ("segmentation_concept", "TEXT"),
             ("preprocessing_info", "TEXT"),
-            ("crop_path", "TEXT"),
-            ("mask_path", "TEXT"),
             ("git_version", "TEXT"),
         ]
         for col_name, col_type in new_columns:
@@ -168,9 +152,9 @@ class Database:
     _INSERT_SQL = """
         INSERT INTO detections
         (post_id, character_name, embedding_id, bbox_x, bbox_y, bbox_width, bbox_height,
-         confidence, segmentor_model, source, uploaded_by, source_filename, source_url,
-         is_cropped, segmentation_concept, preprocessing_info, crop_path, mask_path, git_version)
-        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+         confidence, segmentor_model, source, uploaded_by, source_filename,
+         preprocessing_info, git_version)
+        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
     """
 
     def _detection_to_tuple(self, d: Detection) -> tuple:
@@ -178,8 +162,7 @@ class Database:
             d.post_id, d.character_name, d.embedding_id,
             d.bbox_x, d.bbox_y, d.bbox_width, d.bbox_height,
             d.confidence, d.segmentor_model, d.source, d.uploaded_by,
-            d.source_filename, d.source_url, 1 if d.is_cropped else 0,
-            d.segmentation_concept, d.preprocessing_info, d.crop_path, d.mask_path,
+            d.source_filename, d.preprocessing_info,
             d.git_version or get_git_version(),
         )
 
@@ -216,13 +199,8 @@ class Database:
             source=row[11] if len(row) > 11 else None,
             uploaded_by=row[12] if len(row) > 12 else None,
             source_filename=row[13] if len(row) > 13 else None,
-            source_url=row[14] if len(row) > 14 else None,
-            is_cropped=bool(row[15]) if len(row) > 15 else False,
-            segmentation_concept=row[16] if len(row) > 16 else None,
-            preprocessing_info=row[17] if len(row) > 17 else None,
-            crop_path=row[18] if len(row) > 18 else None,
-            mask_path=row[19] if len(row) > 19 else None,
-            git_version=row[20] if len(row) > 20 else None,
+            preprocessing_info=row[14] if len(row) > 14 else None,
+            git_version=row[15] if len(row) > 15 else None,
         )
 
     @retry_on_locked()

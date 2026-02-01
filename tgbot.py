@@ -198,19 +198,27 @@ async def download_tg_file(new_file):
         f.flush()
     return temp_path
 
+def make_tgbot_post_id(chat_id: int, msg_id: int, file_id: str) -> str:
+    """Create a unique post_id from telegram message identifiers."""
+    return f"{chat_id}_{msg_id}_{file_id}"
+
+
 async def add_photo(update: Update, context: ContextTypes.DEFAULT_TYPE, character_name: str):
     """Add a photo to the database for a character."""
     attachment = update.message.effective_attachment
     new_file = await attachment[-1].get_file()
     user = update.effective_user
     uploaded_by = f"@{user.username}" if user and user.username else (str(user.id) if user else None)
+    post_id = make_tgbot_post_id(update.effective_chat.id, update.message.message_id, new_file.file_id)
     try:
         temp_path = await download_tg_file(new_file)
+        # Rename temp file to use post_id so identifier extracts it correctly
+        post_id_path = temp_path.parent / f"{post_id}.jpg"
+        temp_path.rename(post_id_path)
         identifier = get_identifier()
         added = identifier.add_images(
             character_names=[character_name],
-            image_paths=[temp_path],
-            source_url=f"tg://bot_upload/chat/{update.effective_chat.id}/msg/{update.message.message_id}/file/{new_file.file_id}",
+            image_paths=[str(post_id_path)],
             source=SOURCE_TGBOT,
             uploaded_by=uploaded_by,
             add_full_image=True,

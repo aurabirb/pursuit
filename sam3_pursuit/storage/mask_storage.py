@@ -22,6 +22,7 @@ class MaskStorage:
         mask: np.ndarray,
         name: str,
         search: bool = False,
+        source: Optional[str] = None,
     ) -> str:
         """Save a segmentation mask as PNG.
 
@@ -29,11 +30,13 @@ class MaskStorage:
             mask: Binary mask array (H, W) with values 0-255 or 0-1
             name: Base name for the mask file (without extension)
             search: If True, save to search dir; otherwise ingest dir
+            source: Ingestion source for subfolder (e.g., "tgbot", "furtrack")
 
         Returns:
             Path to the saved mask file (relative to base_dir)
         """
-        target_dir = self.search_dir if search else self.ingest_dir
+        base = self.search_dir if search else self.ingest_dir
+        target_dir = base / (source or "unknown")
         target_dir.mkdir(parents=True, exist_ok=True)
 
         # Normalize mask to 0-255 range
@@ -46,8 +49,7 @@ class MaskStorage:
         path = target_dir / f"{name}.png"
         Image.fromarray(mask, mode="L").save(path, optimize=True)
 
-        # Return relative path for storage in database
-        return str(path.relative_to(self.base_dir.parent))
+        return str(path)
 
     def load_mask(self, mask_path: str) -> Optional[np.ndarray]:
         """Load a segmentation mask from file.
@@ -69,27 +71,11 @@ class MaskStorage:
         mask = np.array(Image.open(path).convert("L"))
         return mask
 
-    def get_mask_path(self, name: str, search: bool = False) -> Path:
-        """Get the full path for a mask file.
+    def get_mask_path(self, name: str, search: bool = False, source: Optional[str] = None) -> Path:
+        """Get the full path for a mask file."""
+        base = self.search_dir if search else self.ingest_dir
+        return base / (source or "unknown") / f"{name}.png"
 
-        Args:
-            name: Base name for the mask file (without extension)
-            search: If True, use search dir; otherwise ingest dir
-
-        Returns:
-            Full path to the mask file
-        """
-        target_dir = self.search_dir if search else self.ingest_dir
-        return target_dir / f"{name}.png"
-
-    def mask_exists(self, name: str, search: bool = False) -> bool:
-        """Check if a mask file exists.
-
-        Args:
-            name: Base name for the mask file (without extension)
-            search: If True, check search dir; otherwise ingest dir
-
-        Returns:
-            True if the mask file exists
-        """
-        return self.get_mask_path(name, search).exists()
+    def mask_exists(self, name: str, search: bool = False, source: Optional[str] = None) -> bool:
+        """Check if a mask file exists."""
+        return self.get_mask_path(name, search, source).exists()

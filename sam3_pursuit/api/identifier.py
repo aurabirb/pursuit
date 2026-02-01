@@ -134,24 +134,19 @@ class SAM3FursuitIdentifier:
         name: str,
         search: bool = True,
         mask: Optional[np.ndarray] = None,
-    ) -> tuple[Optional[str], Optional[str]]:
-        """Save crop image and optionally its mask.
-
-        Returns:
-            Tuple of (crop_path, mask_path) relative paths, or None if not saved.
-        """
-        crops_dir = Path(Config.CROPS_SEARCH_DIR if search else Config.CROPS_INGEST_DIR)
+        source: Optional[str] = None,
+    ) -> None:
+        """Save crop image and optionally its mask for debugging."""
+        base = Path(Config.CROPS_SEARCH_DIR if search else Config.CROPS_INGEST_DIR)
+        crops_dir = base / (source or "unknown")
         crops_dir.mkdir(parents=True, exist_ok=True)
         crop_path = crops_dir / f"{name}.jpg"
         print(f"Saving debug crop to {crop_path}")
         image.convert("RGB").save(crop_path, quality=90)
 
-        mask_path = None
         if mask is not None:
-            mask_path = self.mask_storage.save_mask(mask, name, search=search)
+            mask_path = self.mask_storage.save_mask(mask, name, search=search, source=source)
             print(f"Saving mask to {mask_path}")
-
-        return str(crop_path), mask_path
 
     def _search_embedding(self, embedding: np.ndarray, top_k: int) -> list[IdentificationResult]:
         distances, indices = self.index.search(embedding, top_k * 2)
@@ -181,7 +176,6 @@ class SAM3FursuitIdentifier:
         character_names: list[str],
         image_paths: list[str],
         save_crops: bool = False,
-        source_url: Optional[str] = None,
         source: Optional[str] = None,
         uploaded_by: Optional[str] = None,
         add_full_image: bool = True,
@@ -209,17 +203,13 @@ class SAM3FursuitIdentifier:
         pending_embeddings: list[np.ndarray] = []
         pending_detections: list[Detection] = []
 
-        def make_detection(post_id, character_name, bbox, confidence, segmentor_model,
-                          filename, is_cropped, seg_concept, preproc_info,
-                          crop_path=None, mask_path=None):
+        def make_detection(post_id, character_name, bbox, confidence, segmentor_model, filename, preproc_info):
             return Detection(
                 id=None, post_id=post_id, character_name=character_name, embedding_id=-1,
                 bbox_x=bbox[0], bbox_y=bbox[1], bbox_width=bbox[2], bbox_height=bbox[3],
                 confidence=confidence, segmentor_model=segmentor_model,
                 source=source, uploaded_by=uploaded_by, source_filename=filename,
-                source_url=source_url, is_cropped=is_cropped,
-                segmentation_concept=seg_concept, preprocessing_info=preproc_info,
-                crop_path=crop_path, mask_path=mask_path,
+                preprocessing_info=preproc_info,
             )
 
         def flush_batch():
@@ -255,27 +245,20 @@ class SAM3FursuitIdentifier:
                 resized_full = self.pipeline._resize_to_patch_multiple(image)
                 pending_embeddings.append(self.pipeline.embed_only(resized_full).reshape(1, -1))
                 pending_detections.append(make_detection(
-                    post_id, character_name, (0, 0, w, h), 1.0, "full",
-                    filename, False, None, full_preproc))
+                    post_id, character_name, (0, 0, w, h), 1.0, "full", filename, full_preproc))
 
             if post_id in posts_need_seg:
                 proc_results = self.pipeline.process(image)
                 for j, proc_result in enumerate(proc_results):
-                    crop_path = None
-                    mask_path = None
                     if save_crops and proc_result.isolated_crop:
-                        crop_path, mask_path = self._save_debug_crop(
-                            proc_result.isolated_crop,
-                            f"{post_id}_seg_{j}",
-                            search=False,
-                            mask=proc_result.segmentation.crop_mask,
-                        )
+                        self._save_debug_crop(
+                            proc_result.isolated_crop, f"{post_id}_seg_{j}",
+                            search=False, mask=proc_result.segmentation.crop_mask, source=source)
                     pending_embeddings.append(proc_result.embedding.reshape(1, -1))
                     pending_detections.append(make_detection(
                         post_id, character_name, proc_result.segmentation.bbox,
                         proc_result.segmentation.confidence, proc_result.segmentor_model,
-                        filename, True, proc_result.segmentor_concept, seg_preproc,
-                        crop_path=crop_path, mask_path=mask_path))
+                        filename, seg_preproc))
 
                 full_msg = "+full" if (add_full_image and post_id in posts_need_full) else ""
                 print(f"[{i+1}/{total}] {character_name}: {len(proc_results)} segments{full_msg}")

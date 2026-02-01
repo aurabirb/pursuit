@@ -19,6 +19,7 @@ __pycache__/
 # Downloaded data
 datasets/
 furtrack_images/
+barq_images/
 embeddings/
 runs/
 pursuit_crops/
@@ -32,4 +33,7 @@ static/models/
 # IDE
 .vscode/
 .idea/
+
+# macOS
+._*
 

@@ -30,7 +30,7 @@ REQUEST_DELAY = 0.5
 MAX_RETRIES = 5
 INITIAL_BACKOFF = 5
 
-PROFILE_SEARCH_QUERY = """
+PROFILE_SEARCH_QUERY_MINIMAL = """
 query ProfileSearch($filters: ProfileSearchFiltersInput! = {}, $cursor: String = "", $limit: Int = 30) {
   profileSearch(filters: $filters, cursor: $cursor, limit: $limit, sort: distance) {
     uuid
@@ -42,6 +42,244 @@ query ProfileSearch($filters: ProfileSearchFiltersInput! = {}, $cursor: String =
     images { image { uuid } }
   }
 }
+"""
+
+PROFILE_SEARCH_QUERY_FULL = """
+query ProfileSearch($filters: ProfileSearchFiltersInput! = {}, $cursor: String = "", $limit: Int = 30) {
+  profileSearch(filters: $filters, cursor: $cursor, limit: $limit, sort: distance) {
+    id
+    uuid
+    displayName
+    username
+    roles
+    age
+    dateOfBirth
+    ...ProfilePrimaryImagesFragment
+    ...ProfileHeaderImagesFragment
+    privacySettings {
+    ...PrivacySettingsFragment
+    __typename
+    }
+    location {
+    ...ProfileLocationFragment
+    precision
+    __typename
+    }
+    images {
+    ...ProfileImageFragment
+    __typename
+    }
+    bio {
+    ...ProfileBioFragment
+    __typename
+    }
+    socialAccounts {
+    ...ProfileSocialAccountFragment
+    __typename
+    }
+    bioAd {
+    ...ProfileBioAdFragment
+    __typename
+    }
+    kinks(type: all) {
+    ...ProfileKinkFragment
+    __typename
+    }
+    sonas {
+    ...SonaFragment
+    __typename
+    }
+    __typename
+  }
+}
+
+fragment ProfilePrimaryImagesFragment on Profile {
+  ...ProfileSafePrimaryImageFragment
+  ...ProfileExplicitPrimaryImageFragment
+  __typename
+}
+
+fragment ProfileSafePrimaryImageFragment on Profile {
+  primaryImage {
+    ...UploadedImageFragment
+    __typename
+  }
+  __typename
+}
+
+fragment UploadedImageFragment on UploadedImage {
+  uuid
+  contentRating
+  width
+  height
+  blurHash
+  __typename
+}
+
+fragment ProfileExplicitPrimaryImageFragment on Profile {
+  primaryImageAd {
+    ...UploadedImageFragment
+    __typename
+  }
+  __typename
+}
+
+fragment ProfileHeaderImagesFragment on Profile {
+  ...ProfileSafeHeaderImageFragment
+  ...ProfileExplicitHeaderImageFragment
+  __typename
+}
+
+fragment ProfileSafeHeaderImageFragment on Profile {
+  headerImage {
+    ...UploadedImageFragment
+    __typename
+  }
+  __typename
+}
+
+fragment ProfileExplicitHeaderImageFragment on Profile {
+  headerImageAd {
+    ...UploadedImageFragment
+    __typename
+  }
+  __typename
+}
+
+fragment PrivacySettingsFragment on PrivacySettings {
+  startChat
+  viewKinks
+  viewAge
+  viewAd
+  viewProfile
+  showLastOnline
+  __typename
+}
+
+fragment ProfileLocationFragment on ProfileLocation {
+  type
+  homePlace {
+    ...PlaceFragment
+    __typename
+  }
+  place {
+    ...PlaceFragment
+    __typename
+  }
+  __typename
+}
+
+fragment PlaceFragment on Place {
+  id
+  place
+  region
+  country
+  countryCode
+  longitude
+  latitude
+  __typename
+}
+
+fragment ProfileImageFragment on ProfileImage {
+  id
+  image {
+    ...UploadedImageFragment
+    __typename
+  }
+  accessPermission
+  isAd
+  __typename
+}
+
+fragment ProfileBioFragment on ProfileBio {
+  biography
+  genders
+  languages
+  relationshipStatus
+  sexualOrientation
+  interests
+  hobbies {
+    ...InterestFragment
+    __typename
+  }
+  __typename
+}
+
+fragment InterestFragment on Interest {
+  interest
+  __typename
+}
+
+fragment ProfileSocialAccountFragment on ProfileSocialAccount {
+  id
+  socialNetwork
+  isVerified
+  url
+  displayName
+  value
+  accessPermission
+  __typename
+}
+
+fragment ProfileBioAdFragment on ProfileBioAd {
+  biography
+  sexPositions
+  behaviour
+  safeSex
+  canHost
+  __typename
+}
+
+fragment ProfileKinkFragment on ProfileKink {
+  pleasureGive
+  pleasureReceive
+  kink {
+    ...KinkFragment
+    __typename
+  }
+  __typename
+}
+
+fragment KinkFragment on Kink {
+  id
+  displayName
+  categoryName
+  isVerified
+  isSinglePlayer
+  __typename
+}
+
+fragment SonaFragment on Sona {
+  id
+  displayName
+  hasFursuit
+  species {
+    ...SpeciesFragment
+    __typename
+  }
+  images {
+    ...SonaImageFragment
+    __typename
+  }
+  __typename
+}
+
+fragment SpeciesFragment on Species {
+  id
+  displayName
+  __typename
+}
+
+fragment SonaImageFragment on ProfileImage {
+  id
+  image {
+    ...UploadedImageFragment
+    __typename
+  }
+  isAd
+  __typename
+}
+
 """
 
 _conn: sqlite3.Connection | None = None
@@ -304,7 +542,7 @@ async def fetch_with_backoff(session: aiohttp.ClientSession, method: str, url: s
     return None
 
 
-async def fetch_profiles(session: aiohttp.ClientSession, lat: float, lon: float, cursor: str = "", limit: int = 60) -> tuple[list[dict], str]:
+async def fetch_profiles(session: aiohttp.ClientSession, lat: float, lon: float, cursor: str = "", limit: int = 100, full_profile: bool = True) -> tuple[list[dict], str]:
     payload = {
         "operationName": "ProfileSearch",
         "variables": {
@@ -312,7 +550,7 @@ async def fetch_profiles(session: aiohttp.ClientSession, lat: float, lon: float,
             "cursor": cursor,
             "limit": limit,
         },
-        "query": PROFILE_SEARCH_QUERY,
+        "query": PROFILE_SEARCH_QUERY_FULL if full_profile else PROFILE_SEARCH_QUERY_MINIMAL,
     }
     resp = await fetch_with_backoff(session, "POST", GRAPHQL_URL, json=payload)
     if not resp or resp.status != 200:
@@ -337,7 +575,7 @@ async def download_image(session: aiohttp.ClientSession, image_uuid: str, dest: 
         return False, status
 
 
-async def download_all_profiles(lat: float, lon: float, max_pages: int = 100, all_images: bool = False, max_age: float | None = None, score_fn=None, threshold: float = 0.85):
+async def download_all_profiles(lat: float, lon: float, max_pages: int = 100, all_images: bool = False, max_age: float | None = None, score_fn=None, threshold: float = 0.85, full_profile: bool = True):
     """Download profile images from Barq."""
     headers = get_headers()
     semaphore = asyncio.Semaphore(MAX_CONCURRENT_DOWNLOADS)
@@ -354,7 +592,7 @@ async def download_all_profiles(lat: float, lon: float, max_pages: int = 100, al
             if page > 0:
                 await asyncio.sleep(REQUEST_DELAY)
 
-            profiles, cursor = await fetch_profiles(session, lat, lon, cursor)
+            profiles, cursor = await fetch_profiles(session, lat, lon, cursor, full_profile=full_profile)
             if not profiles:
                 break
 
@@ -465,6 +703,7 @@ def main():
     parser.add_argument("--lon", type=float, default=4.9, help="Longitude for search center")
     parser.add_argument("--max-pages", type=int, default=100, help="Max pages to fetch")
     parser.add_argument("--all-images", action="store_true", help="Download all images per profile (not just primary)")
+    parser.add_argument("--minimal", action="store_true", help="Only download image metadata, not full profile data")
     parser.add_argument("--max-age", type=float, help="Skip profiles cached within this many days")
     parser.add_argument("--skip-non-fursuit", action="store_true", help="Filter out non-fursuit images using CLIP")
     args = parser.parse_args()
@@ -475,7 +714,7 @@ def main():
             from sam3_pursuit.models.classifier import ImageClassifier
             classifier = ImageClassifier()
             score_fn = classifier.fursuit_score
-        asyncio.run(download_all_profiles(args.lat, args.lon, args.max_pages, args.all_images, args.max_age, score_fn=score_fn))
+        asyncio.run(download_all_profiles(args.lat, args.lon, args.max_pages, args.all_images, args.max_age, score_fn=score_fn, full_profile=not args.minimal))
     else:
         parser.print_help()
 

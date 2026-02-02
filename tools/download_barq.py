@@ -123,6 +123,14 @@ def get_filtered_images(threshold: float) -> set[str]:
     return {row[0] for row in rows}
 
 
+def get_all_classified_images() -> dict[str, float]:
+    """Get all image UUIDs with their scores."""
+    rows = get_cache_db().execute(
+        "SELECT image_uuid, max_score FROM filtered_images WHERE max_score IS NOT NULL"
+    ).fetchall()
+    return {row[0]: row[1] for row in rows}
+
+
 def save_failed_image(image_uuid: str, status_code: int):
     conn = get_cache_db()
     conn.execute(
@@ -137,8 +145,25 @@ def get_failed_images() -> set[str]:
     return {row[0] for row in rows}
 
 
+def clean_empty_dirs(images_dir: Path | str | None = None) -> int:
+    """Remove empty character directories. Returns count of removed directories."""
+    images_dir = Path(images_dir or IMAGES_DIR)
+    if not images_dir.exists():
+        return 0
+
+    removed = 0
+    for char_folder in list(images_dir.iterdir()):
+        if char_folder.is_dir() and not any(char_folder.iterdir()):
+            char_folder.rmdir()
+            removed += 1
+    return removed
+
+
 def clean_images(score_fn, threshold: float):
-    """Delete existing images that score below the threshold."""
+    """Delete existing images that score below the threshold.
+
+    Uses cached scores from database when available, only runs classifier on new images.
+    """
     from PIL import Image
 
     images_dir = Path(IMAGES_DIR)
@@ -146,33 +171,67 @@ def clean_images(score_fn, threshold: float):
         print(f"No images directory: {images_dir}")
         return
 
-    filtered_uuids = get_filtered_images(threshold)
-    deleted = 0
+    # Get cached scores from database
+    cached_scores = get_all_classified_images()
+    print(f"Found {len(cached_scores)} cached scores in database")
+
+    # Get all images on disk
+    all_images = list(images_dir.glob("*/*.jpg"))
+    print(f"Found {len(all_images)} images on disk")
+
+    if not all_images:
+        print("Nothing to clean")
+        return
+
+    deleted_cached = 0
+    deleted_new = 0
     kept = 0
+    to_classify = []
 
-    for char_folder in sorted(images_dir.iterdir()):
-        if not char_folder.is_dir():
-            continue
+    # First pass: use cached scores
+    print("Checking cached scores...")
+    for img_path in all_images:
+        img_uuid = img_path.stem
+        if img_uuid in cached_scores:
+            score = cached_scores[img_uuid]
+            if score < threshold:
+                img_path.unlink()
+                print(f"  {img_path.parent.name}: {img_uuid}.jpg (deleted from cache: {score:.0%} < {threshold:.0%})")
+                deleted_cached += 1
+            else:
+                kept += 1
+        else:
+            to_classify.append(img_path)
 
-        for img_path in char_folder.glob("*.jpg"):
+    # Second pass: classify new images
+    if to_classify:
+        print(f"\nClassifying {len(to_classify)} new images...")
+        for i, img_path in enumerate(to_classify, 1):
             img_uuid = img_path.stem
-            if img_uuid in filtered_uuids:
-                continue
+            char_folder = img_path.parent
 
             try:
                 img = Image.open(img_path)
                 score = score_fn(img)
+                save_filtered_image(img_uuid, score)
                 if score < threshold:
                     img_path.unlink()
-                    save_filtered_image(img_uuid, score)
-                    print(f"  {char_folder.name}: {img_uuid}.jpg (deleted: {score:.0%} < {threshold:.0%})")
-                    deleted += 1
+                    print(f"  [{i}/{len(to_classify)}] {char_folder.name}: {img_uuid}.jpg (deleted: {score:.0%} < {threshold:.0%})")
+                    deleted_new += 1
                 else:
+                    print(f"  [{i}/{len(to_classify)}] {char_folder.name}: {img_uuid}.jpg (kept: {score:.0%})")
                     kept += 1
             except Exception as e:
-                print(f"  Error processing {img_path}: {e}")
+                print(f"  [{i}/{len(to_classify)}] Error processing {img_path}: {e}")
 
-    print(f"\nDeleted: {deleted}, kept: {kept}")
+    # Clean up empty directories
+    removed_dirs = clean_empty_dirs(images_dir)
+
+    # Summary
+    total_deleted = deleted_cached + deleted_new
+    cache_msg = f" ({deleted_cached} from cache, {deleted_new} newly classified)" if deleted_cached and deleted_new else ""
+    empty_msg = f", removed {removed_dirs} empty directories" if removed_dirs else ""
+    print(f"\nDeleted: {total_deleted}{cache_msg}, kept: {kept}{empty_msg}")
 
 
 def get_headers() -> dict:
@@ -340,10 +399,10 @@ async def download_all_profiles(lat: float, lon: float, max_pages: int = 100, al
                                 try:
                                     img = Image.open(dest)
                                     score = score_fn(img)
+                                    save_filtered_image(img_uuid, score)  # Cache score for --clean
                                     if score < threshold:
                                         dest.unlink()
                                         existing.discard(img_uuid)
-                                        save_filtered_image(img_uuid, score)
                                         filtered_uuids.add(img_uuid)
                                         print(f"  {folder_name}: {img_uuid}.jpg (filtered existing: {score:.0%} < {threshold:.0%})")
                                         filtered += 1
@@ -357,9 +416,10 @@ async def download_all_profiles(lat: float, lon: float, max_pages: int = 100, al
                         continue
 
                     for img_uuid in new_uuids:
-                        char_folder.mkdir(parents=True, exist_ok=True)
                         dest = char_folder / f"{img_uuid}.jpg"
 
+                        # Create directory only when we're about to save a file
+                        char_folder.mkdir(parents=True, exist_ok=True)
                         success, status = await download_image(session, img_uuid, dest, semaphore)
                         if not success:
                             if status == 404:
@@ -372,9 +432,9 @@ async def download_all_profiles(lat: float, lon: float, max_pages: int = 100, al
                             try:
                                 img = Image.open(dest)
                                 score = score_fn(img)
+                                save_filtered_image(img_uuid, score)  # Cache score for --clean
                                 if score < threshold:
                                     dest.unlink()
-                                    save_filtered_image(img_uuid, score)
                                     filtered_uuids.add(img_uuid)
                                     print(f"  {folder_name}: {img_uuid}.jpg (filtered: {score:.0%} < {threshold:.0%})")
                                     filtered += 1
@@ -390,8 +450,11 @@ async def download_all_profiles(lat: float, lon: float, max_pages: int = 100, al
             if not cursor:
                 break
 
+        # Clean up empty directories left by filtering
+        removed_dirs = clean_empty_dirs()
         filter_msg = f", filtered (not fursuit): {filtered}" if filtered else ""
-        print(f"\nTotal downloaded: {total}, skipped (cached): {skipped}{filter_msg}")
+        empty_msg = f", removed {removed_dirs} empty directories" if removed_dirs else ""
+        print(f"\nTotal downloaded: {total}, skipped (cached): {skipped}{filter_msg}{empty_msg}")
 
 
 def main():

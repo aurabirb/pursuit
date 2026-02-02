@@ -142,6 +142,56 @@ pursuit stats
 pursuit stats --json
 ```
 
+### Working with multiple datasets
+
+Use `--dataset` (`-d` or `-ds`) to work with different datasets. Each dataset has its own `.db` and `.index` files.
+
+```bash
+# Add to default dataset (pursuit.db)
+pursuit add -c "CharName" -s manual img1.jpg
+
+# Add to a different dataset (validation.db)
+pursuit -ds validation add -c "CharName" -s manual img1.jpg
+
+# View stats for a specific dataset
+pursuit -ds validation stats
+```
+
+### Validation workflow
+
+Build a validation set and evaluate model accuracy:
+
+```bash
+# 1. Download validation images (auto-excludes main dataset, outputs to datasets/validation/furtrack/)
+pursuit -ds validation download furtrack -c "CharName" -m 5
+pursuit -ds validation download furtrack --all -m 2
+
+# 2. Ingest into validation dataset (auto data-dir: datasets/validation/furtrack/)
+pursuit -ds validation ingest directory -s furtrack
+
+# 3. Evaluate validation set against main dataset
+pursuit evaluate
+pursuit evaluate --from validation --against pursuit --top-k 5
+pursuit evaluate --json
+```
+
+The evaluate command outputs:
+- Top-1 and top-k accuracy
+- Breakdown by source, preprocessing config, and character
+- Confidence calibration (accuracy per confidence bucket)
+
+### Download with exclusions
+
+Skip images already in specified datasets:
+
+```bash
+# Download only images not in the main dataset
+pursuit download furtrack --all -e pursuit
+
+# Download only images not in any existing dataset
+pursuit download barq -e pursuit,validation
+```
+
 ### Run Telegram bot
 
 ```bash
@@ -327,22 +377,29 @@ pursuit/
 | File | Description |
 |------|-------------|
 | `sam3.pt` | SAM3 model weights (~3.5GB) |
-| `pursuit.db` | SQLite database with detection metadata (default) |
-| `pursuit.index` | FAISS index with embeddings (default) |
+| `pursuit.db` | SQLite database with detection metadata (default dataset) |
+| `pursuit.index` | FAISS index with embeddings (default dataset) |
+| `<name>.db` | Database for custom dataset (e.g., `validation.db`) |
+| `<name>.index` | Index for custom dataset (e.g., `validation.index`) |
 | `pursuit_crops/` | Saved crop images for debugging (when using `--save-crops`) |
 | `pursuit_masks/` | Saved segmentation masks (when using `--save-crops`) |
+| `datasets/<dataset>/<source>/` | Default download/ingest directory for non-default datasets |
 
-These files are gitignored. Use `--db` and `--index` flags to use custom paths.
+These files are gitignored. Use `--dataset` (`-ds`) to switch between datasets.
 
 ## Configuration
 
 Key settings in `sam3_pursuit/config.py`:
 
 ```python
-# File paths
-DEFAULT_DB_NAME = "pursuit.db"         # Default database file
-DEFAULT_INDEX_NAME = "pursuit.index"   # Default index file
-DEFAULT_MASKS_DIR = "pursuit_masks"    # Segmentation masks directory
+# Dataset name (change this to rename all default files)
+DEFAULT_DATASET = "pursuit"            # Used for db/index/crops/masks naming
+
+# File paths (derived from DEFAULT_DATASET)
+DEFAULT_DB_NAME = f"{DEFAULT_DATASET}.db"
+DEFAULT_INDEX_NAME = f"{DEFAULT_DATASET}.index"
+DEFAULT_CROPS_DIR = f"{DEFAULT_DATASET}_crops"
+DEFAULT_MASKS_DIR = f"{DEFAULT_DATASET}_masks"
 
 # Models
 SAM3_MODEL = "sam3"                    # Model name

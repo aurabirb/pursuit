@@ -1,5 +1,6 @@
 import argparse
 import json
+import os
 import sys
 from pathlib import Path
 
@@ -12,23 +13,35 @@ from sam3_pursuit.storage.database import (
 )
 
 
+def _get_dataset_paths(dataset: str) -> tuple[str, str]:
+    """Get db and index paths for a dataset name."""
+    if dataset == Config.DEFAULT_DATASET:
+        return Config.DB_PATH, Config.INDEX_PATH
+    base_dir = os.path.dirname(Config.DB_PATH)
+    return os.path.join(base_dir, f"{dataset}.db"), os.path.join(base_dir, f"{dataset}.index")
+
+
 def main():
     parser = argparse.ArgumentParser(
         prog="pursuit",
         description="Fursuit character recognition using SAM3 and DINOv2",
         formatter_class=argparse.RawDescriptionHelpFormatter,
-        epilog="""
+        epilog=f"""
 Examples:
   pursuit identify photo.jpg
   pursuit add -c "CharName" -s manual img1.jpg img2.jpg
-  pursuit download furtrack --all
-  pursuit download barq --lat 52.378 --lon 4.9
   pursuit ingest directory --data-dir ./characters/ -s furtrack
+  pursuit download furtrack --all
   pursuit stats
+
+  # Validation workflow (--dataset sets output-dir and excludes main dataset)
+  pursuit --dataset validation download furtrack -c "CharName" --max-images 3
+  pursuit --dataset validation ingest directory -s furtrack
+  pursuit evaluate  # --from validation --against {Config.DEFAULT_DATASET}
         """
     )
-    parser.add_argument("--db", default=Config.DB_PATH, help="Database path")
-    parser.add_argument("--index", default=Config.INDEX_PATH, help="Index path")
+    parser.add_argument("--dataset", "-d", "-ds", default=Config.DEFAULT_DATASET,
+                        help=f"Dataset name (default: {Config.DEFAULT_DATASET}). Sets db/index paths to <name>.db/<name>.index")
     parser.add_argument("--no-segment", "-S", dest="segment", action="store_false", help="Do not use segmentation")
     parser.add_argument("--concept", default=Config.DEFAULT_CONCEPT, help="SAM3 concept")
     parser.add_argument("--background", "-bg", default=Config.DEFAULT_BACKGROUND_MODE,
@@ -67,7 +80,7 @@ Examples:
     ingest_parser = subparsers.add_parser("ingest", help="Bulk ingest images")
     ingest_parser.add_argument("method", choices=["directory", "nfc25", "barq"],
                                help="Ingestion method")
-    ingest_parser.add_argument("--data-dir", required=True, help="Data directory")
+    ingest_parser.add_argument("--data-dir", "-dd", help="Data directory (default: datasets/<dataset>/<source>)")
     ingest_parser.add_argument("--source", "-s", required=False, choices=SOURCES_AVAILABLE,
                            help="Source dataset for provenance")
     ingest_parser.add_argument("--limit", type=int, help="Limit number of images per character")
@@ -102,6 +115,7 @@ Examples:
                                   help="Max images per character (default: 2)")
     furtrack_parser.add_argument("--output-dir", "-o", default="furtrack_images",
                                   help="Output directory (default: furtrack_images)")
+    furtrack_parser.add_argument("--exclude-datasets", "-e", help="Skip post_ids in these datasets (comma-separated)")
 
     barq_parser = download_subparsers.add_parser("barq", help="Download from Barq (requires BARQ_BEARER_TOKEN)")
     barq_parser.add_argument("--lat", type=float, default=52.378, help="Latitude (default: Amsterdam)")
@@ -111,9 +125,21 @@ Examples:
     barq_parser.add_argument("--max-age", type=float, help="Skip profiles cached within N days")
     barq_parser.add_argument("--output-dir", "-o", default="barq_images", help="Output directory (default: barq_images)")
     barq_parser.add_argument("--clean", action="store_true", help="Delete existing images below threshold (no download)")
+    barq_parser.add_argument("--exclude-datasets", "-e", help="Skip post_ids in these datasets (comma-separated)")
     _add_classify_args(barq_parser, default=True)
 
+    evaluate_parser = subparsers.add_parser("evaluate", help="Evaluate one dataset against another")
+    evaluate_parser.add_argument("--from", dest="from_dataset", default="validation",
+                                  help="Dataset to evaluate (default: validation)")
+    evaluate_parser.add_argument("--against", default=Config.DEFAULT_DATASET,
+                                  help=f"Dataset to query against (default: {Config.DEFAULT_DATASET})")
+    evaluate_parser.add_argument("--top-k", "-k", type=int, default=5, help="Top-k for accuracy calculation")
+    evaluate_parser.add_argument("--json", action="store_true", help="Output as JSON")
+
     args = parser.parse_args()
+
+    # Set db/index paths from --dataset
+    args.db, args.index = _get_dataset_paths(args.dataset)
 
     if not args.command:
         parser.print_help()
@@ -135,6 +161,8 @@ Examples:
         classify_command(args)
     elif args.command == "download":
         download_command(args)
+    elif args.command == "evaluate":
+        evaluate_command(args)
 
 
 def _add_classify_args(parser, default=None):
@@ -181,6 +209,33 @@ def _get_identifier(args):
         isolation_config=isolation_config,
         segmentor_model_name=segmentor_model_name,
         segmentor_concept=segmentor_concept)
+
+
+def _get_excluded_post_ids(exclude_datasets: str) -> set[str]:
+    """Get all post_ids from the specified datasets."""
+    from sam3_pursuit.storage.database import Database
+
+    if not exclude_datasets:
+        return set()
+
+    excluded = set()
+    for dataset in exclude_datasets.split(","):
+        dataset = dataset.strip()
+        if not dataset:
+            continue
+        db_path, _ = _get_dataset_paths(dataset)
+        if not os.path.exists(db_path):
+            print(f"Warning: Dataset '{dataset}' not found at {db_path}")
+            continue
+        db = Database(db_path)
+        conn = db._connect()
+        cursor = conn.cursor()
+        cursor.execute("SELECT DISTINCT post_id FROM detections")
+        excluded.update(row[0] for row in cursor.fetchall())
+        db.close()
+        print(f"Excluding {len(excluded)} post_ids from {dataset}")
+
+    return excluded
 
 
 def identify_command(args):
@@ -250,7 +305,7 @@ def add_command(args):
     if not valid_paths:
         print("Error: No valid images provided.")
         sys.exit(1)
-    
+
     if not args.character:
         print("Error: Character name is required.")
         sys.exit(1)
@@ -345,6 +400,13 @@ def show_command(args):
 
 def ingest_command(args):
     """Handle ingest command - bulk import images."""
+    # Set default data-dir based on dataset and source if not provided
+    if not args.data_dir:
+        if args.source:
+            args.data_dir = f"datasets/{args.dataset}/{args.source}"
+        else:
+            print("Error: --data-dir is required (or specify --source for default path)")
+            sys.exit(1)
 
     if args.method == "directory":
         if not args.source:
@@ -394,7 +456,6 @@ def ingest_from_directory(args):
     for batch in batched(get_images(), batch_size):
         print(f"[{total_added}] Batch adding {len(batch)} images to the index...")
         names, images = zip(*batch)
-        # print(names, images)
         add_full_image = getattr(args, "add_full_image", True)
         added = identifier.add_images(
             character_names=names,
@@ -526,7 +587,7 @@ def stats_command(args):
     if hasattr(args, "json") and args.json:
         print(json.dumps(stats, indent=2, default=str))
     else:
-        print("\nPursuit - Fursuit Recognition System Statistics")
+        print(f"\nPursuit Statistics ({args.dataset})")
         print("=" * 50)
         print(f"Total detections: {stats['total_detections']}")
         print(f"Unique characters: {stats['unique_characters']}")
@@ -645,10 +706,21 @@ def download_command(args):
     """Handle download command."""
     sys.path.insert(0, str(Path(__file__).parent.parent.parent / "tools"))
 
+    # When downloading to a non-default dataset, auto-configure paths and exclusions
+    if args.dataset != Config.DEFAULT_DATASET:
+        if not args.output_dir or args.output_dir in ("furtrack_images", "barq_images"):
+            args.output_dir = f"datasets/{args.dataset}/{args.source}"
+        if not getattr(args, "exclude_datasets", None):
+            args.exclude_datasets = Config.DEFAULT_DATASET
+
+    excluded_post_ids = _get_excluded_post_ids(getattr(args, "exclude_datasets", None))
+
     if args.source == "furtrack":
         import download_furtrack
         if args.output_dir:
             download_furtrack.IMAGES_DIR = args.output_dir
+        if excluded_post_ids:
+            download_furtrack.EXCLUDED_POST_IDS = excluded_post_ids
         if args.character:
             count = download_furtrack.download_character(args.character, args.max_images)
             print(f"Downloaded {count} images")
@@ -663,6 +735,8 @@ def download_command(args):
         import download_barq
         if args.output_dir:
             download_barq.IMAGES_DIR = args.output_dir
+        if excluded_post_ids:
+            download_barq.EXCLUDED_POST_IDS = excluded_post_ids
 
         if args.clean:
             from sam3_pursuit.models.classifier import ImageClassifier
@@ -679,6 +753,174 @@ def download_command(args):
     else:
         print("Error: Use 'pursuit download furtrack' or 'pursuit download barq'")
         sys.exit(1)
+
+
+def evaluate_command(args):
+    """Evaluate one dataset against another."""
+    import numpy as np
+    from sam3_pursuit.storage.database import Database
+    from sam3_pursuit.storage.vector_index import VectorIndex
+
+    from_db_path, from_index_path = _get_dataset_paths(args.from_dataset)
+    against_db_path, against_index_path = _get_dataset_paths(args.against)
+
+    # Load "from" dataset (validation/test set)
+    if not os.path.exists(from_db_path):
+        print(f"Error: Dataset '{args.from_dataset}' not found at {from_db_path}")
+        sys.exit(1)
+    from_db = Database(from_db_path)
+    from_index = VectorIndex(from_index_path)
+
+    # Load "against" dataset (training/reference set)
+    if not os.path.exists(against_db_path):
+        print(f"Error: Dataset '{args.against}' not found at {against_db_path}")
+        sys.exit(1)
+    against_db = Database(against_db_path)
+    against_index = VectorIndex(against_index_path)
+
+    if from_index.size == 0:
+        print(f"Error: Dataset '{args.from_dataset}' is empty.")
+        sys.exit(1)
+
+    if against_index.size == 0:
+        print(f"Error: Dataset '{args.against}' is empty.")
+        sys.exit(1)
+
+    top_k = args.top_k
+
+    # Get all detections from "from" dataset
+    conn = from_db._connect()
+    cursor = conn.cursor()
+    cursor.execute("SELECT embedding_id, character_name, source, preprocessing_info FROM detections ORDER BY embedding_id")
+    from_detections = cursor.fetchall()
+
+    if not from_detections:
+        print(f"Error: No detections in '{args.from_dataset}' database.")
+        sys.exit(1)
+
+    # Evaluate
+    top_1_correct = 0
+    top_k_correct = 0
+    total = 0
+    by_source = {}
+    by_preprocessing = {}
+    by_character = {}
+    confidence_buckets = {i: {"correct": 0, "total": 0} for i in range(10)}
+
+    for emb_id, char_name, source, preproc in from_detections:
+        if emb_id >= from_index.size:
+            continue
+
+        # Reconstruct embedding
+        embedding = np.zeros(Config.EMBEDDING_DIM, dtype=np.float32)
+        from_index.index.reconstruct(emb_id, embedding)
+
+        # Query against dataset
+        distances, indices = against_index.search(embedding.reshape(1, -1), top_k)
+
+        # Get predicted characters
+        predictions = []
+        for dist, idx in zip(distances[0], indices[0]):
+            if idx == -1:
+                continue
+            det = against_db.get_detection_by_embedding_id(int(idx))
+            if det:
+                confidence = max(0.0, 1.0 - dist / 2.0)
+                predictions.append((det.character_name, confidence))
+
+        if not predictions:
+            continue
+
+        total += 1
+        top_1_pred, top_1_conf = predictions[0]
+        is_top_1_correct = top_1_pred == char_name
+        is_top_k_correct = any(p[0] == char_name for p in predictions[:top_k])
+
+        if is_top_1_correct:
+            top_1_correct += 1
+        if is_top_k_correct:
+            top_k_correct += 1
+
+        # Confidence calibration
+        bucket = min(9, int(top_1_conf * 10))
+        confidence_buckets[bucket]["total"] += 1
+        if is_top_1_correct:
+            confidence_buckets[bucket]["correct"] += 1
+
+        # By source
+        src_key = source or "unknown"
+        if src_key not in by_source:
+            by_source[src_key] = {"correct": 0, "total": 0, "top_k_correct": 0}
+        by_source[src_key]["total"] += 1
+        if is_top_1_correct:
+            by_source[src_key]["correct"] += 1
+        if is_top_k_correct:
+            by_source[src_key]["top_k_correct"] += 1
+
+        # By preprocessing
+        prep_key = preproc or "unknown"
+        if prep_key not in by_preprocessing:
+            by_preprocessing[prep_key] = {"correct": 0, "total": 0, "top_k_correct": 0}
+        by_preprocessing[prep_key]["total"] += 1
+        if is_top_1_correct:
+            by_preprocessing[prep_key]["correct"] += 1
+        if is_top_k_correct:
+            by_preprocessing[prep_key]["top_k_correct"] += 1
+
+        # By character
+        if char_name not in by_character:
+            by_character[char_name] = {"correct": 0, "total": 0, "top_k_correct": 0}
+        by_character[char_name]["total"] += 1
+        if is_top_1_correct:
+            by_character[char_name]["correct"] += 1
+        if is_top_k_correct:
+            by_character[char_name]["top_k_correct"] += 1
+
+    if total == 0:
+        print("Error: No valid samples to evaluate.")
+        sys.exit(1)
+
+    top_1_acc = top_1_correct / total
+    top_k_acc = top_k_correct / total
+
+    results = {
+        "from_dataset": args.from_dataset,
+        "against_dataset": args.against,
+        "total_samples": total,
+        "top_1_accuracy": top_1_acc,
+        f"top_{top_k}_accuracy": top_k_acc,
+        "k_value": top_k,
+        "by_source": {k: {"count": v["total"], "top_1_accuracy": v["correct"] / v["total"], f"top_{top_k}_accuracy": v["top_k_correct"] / v["total"]} for k, v in by_source.items()},
+        "by_preprocessing": {k: {"count": v["total"], "top_1_accuracy": v["correct"] / v["total"], f"top_{top_k}_accuracy": v["top_k_correct"] / v["total"]} for k, v in by_preprocessing.items()},
+        "by_character": {k: {"count": v["total"], "top_1_accuracy": v["correct"] / v["total"], f"top_{top_k}_accuracy": v["top_k_correct"] / v["total"]} for k, v in by_character.items()},
+        "confidence_calibration": [{"range": f"{i*10}-{(i+1)*10}%", "count": v["total"], "accuracy": v["correct"] / v["total"] if v["total"] > 0 else 0} for i, v in confidence_buckets.items()],
+    }
+
+    if args.json:
+        print(json.dumps(results, indent=2))
+    else:
+        print(f"\nEvaluation: {args.from_dataset} → {args.against}")
+        print("=" * 50)
+        print(f"Total samples: {total}")
+        print(f"Top-1 accuracy: {top_1_acc:.1%}")
+        print(f"Top-{top_k} accuracy: {top_k_acc:.1%}")
+
+        if by_source:
+            print(f"\nBy Source:")
+            for src, metrics in sorted(by_source.items(), key=lambda x: -x[1]["total"]):
+                acc = metrics["correct"] / metrics["total"]
+                print(f"  {src}: {acc:.1%} (n={metrics['total']})")
+
+        if by_preprocessing:
+            print(f"\nBy Preprocessing:")
+            for prep, metrics in sorted(by_preprocessing.items(), key=lambda x: -x[1]["total"]):
+                acc = metrics["correct"] / metrics["total"]
+                print(f"  {prep}: {acc:.1%} (n={metrics['total']})")
+
+        print(f"\nConfidence Calibration:")
+        for bucket in results["confidence_calibration"]:
+            if bucket["count"] > 0:
+                print(f"  {bucket['range']}: {bucket['accuracy']:.1%} accurate (n={bucket['count']})")
 
 
 if __name__ == "__main__":

@@ -23,6 +23,7 @@ load_dotenv()
 
 IMAGES_DIR = "barq_images"
 CACHE_DB = "barq_cache.db"
+EXCLUDED_POST_IDS: set[str] = set()  # Set by CLI for --exclude-datasets
 MAX_CONCURRENT_DOWNLOADS = 5
 GRAPHQL_URL = "https://api.barq.app/graphql"
 REQUEST_DELAY = 0.5
@@ -409,7 +410,7 @@ async def download_all_profiles(lat: float, lon: float, max_pages: int = 100, al
                                 except Exception:
                                     pass
 
-                    new_uuids = [u for u in img_uuids if u not in existing and u not in filtered_uuids and u not in failed_uuids]
+                    new_uuids = [u for u in img_uuids if u not in existing and u not in filtered_uuids and u not in failed_uuids and u not in EXCLUDED_POST_IDS]
 
                     if not new_uuids:
                         print(f"  {folder_name}: up to date ({len(existing)} images)")

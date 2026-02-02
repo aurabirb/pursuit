@@ -7,11 +7,14 @@ import torch
 class Config:
     BASE_DIR = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 
+    # Dataset name (used for db/index filenames and CLI defaults)
+    DEFAULT_DATASET = "pursuit"
+
     # File paths
-    DEFAULT_DB_NAME = "pursuit.db"
-    DEFAULT_INDEX_NAME = "pursuit.index"
-    DEFAULT_CROPS_DIR = "pursuit_crops"
-    DEFAULT_MASKS_DIR = "pursuit_masks"
+    DEFAULT_DB_NAME = f"{DEFAULT_DATASET}.db"
+    DEFAULT_INDEX_NAME = f"{DEFAULT_DATASET}.index"
+    DEFAULT_CROPS_DIR = f"{DEFAULT_DATASET}_crops"
+    DEFAULT_MASKS_DIR = f"{DEFAULT_DATASET}_masks"
 
     DB_PATH = os.path.join(BASE_DIR, DEFAULT_DB_NAME)
     INDEX_PATH = os.path.join(BASE_DIR, DEFAULT_INDEX_NAME)

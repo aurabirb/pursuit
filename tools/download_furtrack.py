@@ -23,6 +23,7 @@ import requests
 MAX_IMAGES_PER_CHAR = 2
 CACHE_DB = "furtrack_cache.db"
 IMAGES_DIR = "furtrack_images"
+EXCLUDED_POST_IDS: set[str] = set()  # Set by CLI for --exclude-datasets
 MAX_CONCURRENT_DOWNLOADS = 20
 BACKUP_INTERVAL = 1000  # Backup database every N characters
 
@@ -227,7 +228,8 @@ def download_character(char: str, max_images: int = MAX_IMAGES_PER_CHAR) -> int:
     # Filter out already downloaded and collect valid posts
     to_download = []
     for pid in post_ids:
-        if str(pid) in existing:
+        pid_str = str(pid)
+        if pid_str in existing or pid_str in EXCLUDED_POST_IDS:
             continue
         if len(existing) + len(to_download) >= max_images:
             break
@@ -235,7 +237,7 @@ def download_character(char: str, max_images: int = MAX_IMAGES_PER_CHAR) -> int:
         # Check if post is valid (uses cache)
         raw = get_post_metadata(pid)
         if raw and is_valid_post(raw):
-            to_download.append(str(pid))
+            to_download.append(pid_str)
 
     if not to_download:
         print(f"No downloads for {char}, existing: {len(existing)}")

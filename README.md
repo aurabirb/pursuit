@@ -44,4 +44,4 @@ Available on Telegram as [@furspybot](https://t.me/furspybot) and other names.
 - Run a self-similarity search on all database and cluster all potential segments to potentially assign it a tag, this is an extension of the previous point.
 - Introduce a raw storage and process pipeline so that we can always recreate the results. This means a database/table with user edits and clustering results.
 - Run a SAM2 + clip on each fragment instead of heavy SAM3 to determine if it's a fursuit head on the segment.
-
+- Add mode to sync the index and database periodically to an upstream S3 bucket, not sure how to do that exactly but maybe shard them into append-only pieces (kinda like wal or wal itself) and upload those periodically, and merge on the client?

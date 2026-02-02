@@ -36,4 +36,4 @@ static/models/
 
 # macOS
 ._*
-
+.DS_Store

@@ -299,18 +299,58 @@ async def identify_photo(update: Update, context: ContextTypes.DEFAULT_TYPE):
         await context.bot.send_message(chat_id=update.effective_chat.id, text=f"Error: {e}")
 
 
+async def whodis(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """Handle /whodis and /furspy commands - identify a photo being replied to."""
+    if not update.message or not update.message.reply_to_message:
+        await context.bot.send_message(
+            chat_id=update.effective_chat.id,
+            text="Reply to a photo with /whodis or /furspy to identify it."
+        )
+        return
+
+    reply_to = update.message.reply_to_message
+    if not reply_to.photo:
+        await context.bot.send_message(
+            chat_id=update.effective_chat.id,
+            text="The message you replied to doesn't contain a photo."
+        )
+        return
+
+    try:
+        await identify_and_send(context, update.effective_chat.id, reply_to.photo, reply_to.message_id)
+    except Exception as e:
+        print(f"Error in whodis: {e}", file=sys.stderr)
+        await context.bot.send_message(
+            chat_id=update.effective_chat.id,
+            text=f"Error: {e}"
+        )
+
+
 async def reply_to_photo(update: Update, context: ContextTypes.DEFAULT_TYPE):
     """Identify characters when replying to a photo with a bot mention."""
+    user = update.effective_user
+    username = f"@{user.username}" if user and user.username else (str(user.id) if user else "unknown")
+    chat_id = update.effective_chat.id if update.effective_chat else "unknown"
+    msg_text = update.message.text if update.message else None
+
+    print(f"reply_to_photo: user={username} chat={chat_id} text={msg_text!r}", file=sys.stderr)
+
     if not update.message or not update.message.reply_to_message:
+        print(f"  -> no message or reply_to_message", file=sys.stderr)
         return
     reply_to = update.message.reply_to_message
     if not reply_to.photo:
+        print(f"  -> reply_to has no photo (has: text={bool(reply_to.text)}, caption={bool(reply_to.caption)}, document={bool(reply_to.document)})", file=sys.stderr)
         return
 
     text = (update.message.text or "").lower()
     bot_username = (await context.bot.get_me()).username.lower()
+    print(f"  -> looking for @{bot_username} in {text!r}", file=sys.stderr)
     if f"@{bot_username}" not in text:
+        print(f"  -> mention not found", file=sys.stderr)
         return
+
+    print(f"  -> proceeding to identify photo", file=sys.stderr)
 
     try:
         await identify_and_send(context, update.effective_chat.id, reply_to.photo, reply_to.message_id)
@@ -323,12 +363,11 @@ async def reply_to_photo(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
 async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
     """Handle /start command."""
-    bot_username = (await context.bot.get_me()).username
     await context.bot.send_message(
         chat_id=update.effective_chat.id,
-        text=f"Send me a photo to identify fursuit characters.\n\n"
-             f"To add: send photo with caption character:Name\n"
-             f"To identify a reply: mention @{bot_username}"
+        text="Send me a photo to identify fursuit characters.\n\n"
+             "To add: send photo with caption character:Name\n"
+             "To identify in groups: reply to a photo with /whodis or /furspy"
     )
 
 
@@ -653,13 +692,31 @@ async def run_web_server(runner: web.AppRunner):
     print(f"Web server running at http://{WEB_HOST}:{WEB_PORT}")
 
 
+async def debug_all_messages(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """Debug handler to log all incoming messages."""
+    msg = update.message
+    if not msg:
+        return
+    user = update.effective_user
+    username = f"@{user.username}" if user and user.username else (str(user.id) if user else "unknown")
+    print(f"DEBUG incoming: user={username} chat={update.effective_chat.id}", file=sys.stderr)
+    print(f"  text={msg.text!r} caption={msg.caption!r}", file=sys.stderr)
+    print(f"  photo={bool(msg.photo)} reply_to={bool(msg.reply_to_message)}", file=sys.stderr)
+    if msg.reply_to_message:
+        print(f"  reply_to.photo={bool(msg.reply_to_message.photo)}", file=sys.stderr)
+
+
 def build_application(token: str):
     """Create a Telegram application with all handlers."""
     app = ApplicationBuilder().token(token).build()
+    # Debug handler - logs all messages (group=-1 runs before other handlers)
+    app.add_handler(MessageHandler(filters.ALL, debug_all_messages), group=-1)
     app.add_handler(MessageHandler((~filters.COMMAND) & filters.PHOTO, photo))
     app.add_handler(MessageHandler((~filters.COMMAND) & filters.TEXT & filters.REPLY, reply_to_photo))
     app.add_handler(CommandHandler("start", start))
     app.add_handler(CommandHandler("stats", stats))
+    app.add_handler(CommandHandler("whodis", whodis))
+    app.add_handler(CommandHandler("furspy", whodis))
     app.add_handler(CommandHandler("aitool", aitool))
     app.add_handler(CommandHandler("restart", restart))
     app.add_handler(CommandHandler("commit", commit))

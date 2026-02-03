@@ -26,7 +26,7 @@ load_dotenv()
 
 from sam3_pursuit import SAM3FursuitIdentifier, Config
 from sam3_pursuit.api.annotator import annotate_image
-from sam3_pursuit.storage.database import SOURCE_TGBOT
+from sam3_pursuit.storage.database import SOURCE_TGBOT, get_git_version
 
 # Pattern to match "character:Name" in caption
 CHARACTER_PATTERN = re.compile(r"character:(\S+)", re.IGNORECASE)
@@ -159,7 +159,8 @@ async def identify_and_send(context: ContextTypes.DEFAULT_TYPE, chat_id: int,
         await context.bot.send_message(**reply_kwargs, text=f"No matches above {min_confidence:.0%} confidence.")
         return
 
-    annotated = annotate_image(image, results, min_confidence)
+    watermark_text = f"Pursuit {get_git_version()}"
+    annotated = annotate_image(image, results, min_confidence, watermark_text)
     with NamedTemporaryFile(suffix=".jpg", delete=False) as f:
         annotated.save(f, format="JPEG", quality=90)
         temp_annotated_path = f.name

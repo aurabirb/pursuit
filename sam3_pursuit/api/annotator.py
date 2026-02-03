@@ -28,29 +28,6 @@ FONT_PATHS = [
 ]
 
 
-def get_git_version(cwd: str = None) -> str:
-    """Get the current git short hash.
-
-    Args:
-        cwd: Working directory for git command. Defaults to this file's directory.
-    """
-    if cwd is None:
-        cwd = os.path.dirname(os.path.abspath(__file__))
-    try:
-        result = subprocess.run(
-            ["git", "rev-parse", "--short", "HEAD"],
-            capture_output=True,
-            text=True,
-            cwd=cwd,
-            timeout=5,
-        )
-        if result.returncode == 0:
-            return result.stdout.strip()
-    except Exception:
-        pass
-    return "unknown"
-
-
 def _load_fonts(label_size: int = 32, watermark_size: int = 20):
     """Load fonts for annotation, with fallback to default.
 
@@ -80,8 +57,7 @@ def annotate_image(
     image: Image.Image,
     results: List,
     min_confidence: float,
-    watermark: Optional[str] = None,
-    show_watermark: bool = True,
+    watermark_text: Optional[str] = None
 ) -> Image.Image:
     """Draw bounding boxes, character names, and optional watermark on the image.
 
@@ -89,8 +65,7 @@ def annotate_image(
         image: PIL Image to annotate
         results: List of SegmentResults from identification
         min_confidence: Minimum confidence threshold for displaying matches
-        watermark: Custom watermark text. If None, uses "Pursuit {git_version}"
-        show_watermark: Whether to show the watermark bar at the bottom
+        watermark_text: Custom watermark text. If None, does not show watermark.
 
     Returns:
         Annotated PIL Image
@@ -99,13 +74,7 @@ def annotate_image(
     font, watermark_font = _load_fonts()
 
     # Determine watermark text and bar height
-    if show_watermark:
-        if watermark is None:
-            git_version = get_git_version()
-            watermark_text = f"Pursuit {git_version}"
-        else:
-            watermark_text = watermark
-
+    if watermark_text is not None:
         temp_draw = ImageDraw.Draw(img_rgb)
         wm_bbox = temp_draw.textbbox((0, 0), watermark_text, font=watermark_font)
         wm_text_h = wm_bbox[3] - wm_bbox[1]
@@ -148,7 +117,7 @@ def annotate_image(
         draw.text((x + 6, label_y + 3), label, fill="white", font=font)
 
     # Draw watermark text centered in the black bar
-    if show_watermark:
+    if watermark_text is not None:
         wm_bbox = draw.textbbox((0, 0), watermark_text, font=watermark_font)
         wm_text_w = wm_bbox[2] - wm_bbox[0]
         wm_x = (annotated.width - wm_text_w) // 2

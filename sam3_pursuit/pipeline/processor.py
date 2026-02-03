@@ -69,6 +69,21 @@ class ProcessingPipeline:
     def embed_only(self, image: Image.Image) -> np.ndarray:
         return self.embedder.embed(image)
 
+    def process_with_masks(self, image: Image.Image, masks: list[tuple[int, np.ndarray]]) -> list[ProcessingResult]:
+        """Process image using pre-existing masks (skips segmentation)."""
+        results = []
+        for seg_idx, mask in masks:
+            seg = SegmentationResult.from_mask(image, mask, segmentor=self.segmentor_model_name)
+            if seg is None:
+                continue
+            isolated = self.isolator.isolate(seg.crop, seg.crop_mask)
+            isolated_crop = self._resize_to_patch_multiple(isolated)
+            embedding = self.embedder.embed(isolated_crop)
+            results.append(ProcessingResult(
+                segmentation=seg, embedding=embedding, isolated_crop=isolated_crop,
+                segmentor_model=self.segmentor_model_name, segmentor_concept=self.segmentor_concept))
+        return results
+
     @property
     def segmentor_model_name(self) -> str:
         return self.segmentor.model_name

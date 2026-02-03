@@ -529,5 +529,103 @@ class TestBarqIngestion(unittest.TestCase):
             self.assertEqual(len(invalid_det), 0)
 
 
+class TestMaskReuse(unittest.TestCase):
+    """Tests for mask storage and reuse functionality."""
+
+    TESTS_DIR = os.path.dirname(os.path.abspath(__file__))
+    TEST_IMAGE = os.path.join(TESTS_DIR, "blazi_wolf.1.jpg")
+
+    def test_mask_save_and_load_roundtrip(self):
+        """Test that saved masks can be loaded back identically."""
+        from sam3_pursuit.storage.mask_storage import MaskStorage
+
+        with tempfile.TemporaryDirectory() as tmpdir:
+            storage = MaskStorage(base_dir=tmpdir)
+            original_mask = np.random.randint(0, 2, (100, 100), dtype=np.uint8) * 255
+
+            storage.save_mask(original_mask, "test_seg_0", "test_source", "sam3", "fursuiter head")
+            loaded_mask = storage.load_mask("test_seg_0", "test_source", "sam3", "fursuiter head")
+
+            self.assertIsNotNone(loaded_mask)
+            np.testing.assert_array_equal(original_mask, loaded_mask)
+
+    def test_find_masks_for_post(self):
+        """Test finding all masks for a post_id."""
+        from sam3_pursuit.storage.mask_storage import MaskStorage
+
+        with tempfile.TemporaryDirectory() as tmpdir:
+            storage = MaskStorage(base_dir=tmpdir)
+
+            # Save 3 masks for the same post
+            for i in range(3):
+                mask = np.ones((50, 50), dtype=np.uint8) * 255
+                storage.save_mask(mask, f"post123_seg_{i}", "barq", "sam3", "fursuiter head")
+
+            masks = storage.find_masks_for_post("post123", "barq", "sam3", "fursuiter head")
+            self.assertEqual(len(masks), 3)
+
+            # Should be sorted by segment index
+            self.assertTrue(masks[0].name.endswith("_seg_0.png"))
+            self.assertTrue(masks[1].name.endswith("_seg_1.png"))
+            self.assertTrue(masks[2].name.endswith("_seg_2.png"))
+
+    def test_load_masks_for_post(self):
+        """Test loading all masks for a post_id."""
+        from sam3_pursuit.storage.mask_storage import MaskStorage
+
+        with tempfile.TemporaryDirectory() as tmpdir:
+            storage = MaskStorage(base_dir=tmpdir)
+
+            # Save masks with different content
+            for i in range(2):
+                mask = np.ones((50, 50), dtype=np.uint8) * (i + 1) * 100
+                storage.save_mask(mask, f"post456_seg_{i}", "barq", "sam3", "fursuiter head")
+
+            loaded = storage.load_masks_for_post("post456", "barq", "sam3", "fursuiter head")
+            self.assertEqual(len(loaded), 2)
+            self.assertEqual(loaded[0][0], 0)  # segment index
+            self.assertEqual(loaded[1][0], 1)
+
+    @unittest.skipIf(not os.path.exists(os.path.join(os.path.dirname(os.path.abspath(__file__)), "blazi_wolf.1.jpg")), "Test image not found")
+    def test_process_with_masks_matches_fresh_processing(self):
+        """Test that processing with saved masks produces identical embeddings to fresh SAM3."""
+        from sam3_pursuit.pipeline.processor import ProcessingPipeline
+        from sam3_pursuit.storage.mask_storage import MaskStorage
+
+        image = Image.open(self.TEST_IMAGE)
+
+        with tempfile.TemporaryDirectory() as tmpdir:
+            pipeline = ProcessingPipeline(segmentor_model_name="sam3", segmentor_concept="fursuiter head")
+            storage = MaskStorage(base_dir=tmpdir)
+
+            # Run fresh processing with SAM3
+            fresh_results = pipeline.process(image)
+            self.assertGreater(len(fresh_results), 0, "Should detect at least one segment")
+
+            # Save full masks (not crop_mask) for bbox computation
+            for i, result in enumerate(fresh_results):
+                storage.save_mask(
+                    result.segmentation.mask,
+                    f"test_seg_{i}",
+                    "test", "sam3", "fursuiter head"
+                )
+
+            # Load masks and reprocess
+            loaded_masks = storage.load_masks_for_post("test", "test", "sam3", "fursuiter head")
+            reused_results = pipeline.process_with_masks(image, loaded_masks)
+
+            # Compare results
+            self.assertEqual(len(fresh_results), len(reused_results), "Should have same number of segments")
+
+            for i, (fresh, reused) in enumerate(zip(fresh_results, reused_results)):
+                # Embeddings should be identical
+                np.testing.assert_array_almost_equal(
+                    fresh.embedding, reused.embedding, decimal=5,
+                    err_msg=f"Segment {i} embeddings don't match"
+                )
+                # Bboxes should match
+                self.assertEqual(fresh.segmentation.bbox, reused.segmentation.bbox, f"Segment {i} bboxes don't match")
+
+
 if __name__ == "__main__":
     unittest.main()

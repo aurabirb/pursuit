@@ -199,6 +199,8 @@ class SAM3FursuitIdentifier:
         total = len(filtered_indices)
         added_count = 0
         skipped_count = 0
+        masks_reused_count = 0
+        masks_generated_count = 0
         pending_embeddings: list[np.ndarray] = []
         pending_detections: list[Detection] = []
 
@@ -252,13 +254,26 @@ class SAM3FursuitIdentifier:
                     post_id, character_name, (0, 0, w, h), 1.0, "full", filename, full_preproc))
 
             if post_id in posts_need_seg:
-                proc_results = self.pipeline.process(image)
+                # Check for existing masks
+                existing_masks = self.mask_storage.load_masks_for_post(
+                    post_id, source or "unknown",
+                    self.pipeline.segmentor_model_name,
+                    self.pipeline.segmentor_concept or "")
+
+                if existing_masks:
+                    proc_results = self.pipeline.process_with_masks(image, existing_masks)
+                    mask_reused = True
+                    masks_reused_count += 1
+                else:
+                    proc_results = self.pipeline.process(image)
+                    mask_reused = False
+                    masks_generated_count += 1
+
                 for j, proc_result in enumerate(proc_results):
                     seg_name = f"{post_id}_seg_{j}"
-                    # Always save mask for potential reprocessing
-                    if proc_result.segmentation.crop_mask is not None:
+                    if not mask_reused and proc_result.segmentation.mask is not None:
                         self.mask_storage.save_mask(
-                            proc_result.segmentation.crop_mask, seg_name,
+                            proc_result.segmentation.mask, seg_name,
                             source=source or "unknown",
                             model=proc_result.segmentor_model,
                             concept=proc_result.segmentor_concept or "")
@@ -271,7 +286,8 @@ class SAM3FursuitIdentifier:
                         filename, seg_preproc))
 
                 full_msg = "+full" if (add_full_image and post_id in posts_need_full) else ""
-                print(f"[{i+1}/{total}] {character_name}: {len(proc_results)} segments{full_msg}")
+                mask_msg = " (masks reused)" if mask_reused else ""
+                print(f"[{i+1}/{total}] {character_name}: {len(proc_results)} segments{full_msg}{mask_msg}")
             else:
                 print(f"[{i+1}/{total}] {character_name}: full only")
 
@@ -281,7 +297,8 @@ class SAM3FursuitIdentifier:
         flush_batch()
 
         skip_msg = f", {skipped_count} skipped (not fursuit)" if skipped_count else ""
-        print(f"Ingestion complete: {added_count} embeddings added{skip_msg} (index: {self.index.size})")
+        mask_msg = f", masks: {masks_reused_count} reused/{masks_generated_count} generated" if masks_reused_count or masks_generated_count else ""
+        print(f"Ingestion complete: {added_count} embeddings added{skip_msg}{mask_msg} (index: {self.index.size})")
         return added_count
 
     def _load_image(self, img_path: str) -> Image.Image:

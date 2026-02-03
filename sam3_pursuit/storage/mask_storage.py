@@ -75,3 +75,18 @@ class MaskStorage:
     def mask_exists(self, name: str, source: str, model: str, concept: str) -> bool:
         """Check if a mask file exists."""
         return self.get_mask_path(name, source, model, concept).exists()
+
+    def find_masks_for_post(self, post_id: str, source: str, model: str, concept: str) -> list[Path]:
+        """Find all segment masks for a post_id ({post_id}_seg_*.png)."""
+        mask_dir = self._get_mask_dir(source, model, concept)
+        if not mask_dir.exists():
+            return []
+        return sorted(mask_dir.glob(f"{post_id}_seg_*.png"), key=lambda p: int(p.stem.split("_seg_")[-1]))
+
+    def load_masks_for_post(self, post_id: str, source: str, model: str, concept: str) -> list[tuple[int, np.ndarray]]:
+        """Load all segment masks for a post_id. Returns list of (segment_index, mask_array)."""
+        results = []
+        for path in self.find_masks_for_post(post_id, source, model, concept):
+            seg_idx = int(path.stem.split("_seg_")[-1])
+            results.append((seg_idx, np.array(Image.open(path).convert("L"))))
+        return results

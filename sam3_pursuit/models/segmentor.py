@@ -7,6 +7,28 @@ from PIL import Image
 from sam3_pursuit.config import Config
 
 
+def mask_to_bbox(mask: np.ndarray) -> tuple[int, int, int, int] | None:
+    """Convert binary mask to bounding box (x, y, w, h)."""
+    rows = np.any(mask, axis=1)
+    cols = np.any(mask, axis=0)
+    if not np.any(rows) or not np.any(cols):
+        return None
+    y_min, y_max = np.where(rows)[0][[0, -1]]
+    x_min, x_max = np.where(cols)[0][[0, -1]]
+    return (int(x_min), int(y_min), int(x_max - x_min + 1), int(y_max - y_min + 1))
+
+
+def create_crop(image: Image.Image, bbox: tuple[int, int, int, int]) -> Image.Image:
+    x, y, w, h = bbox
+    return image.crop((x, y, x + w, y + h))
+
+
+def create_crop_mask(mask: np.ndarray, bbox: tuple[int, int, int, int]) -> np.ndarray:
+    x, y, w, h = bbox
+    cropped = mask[y:y + h, x:x + w]
+    return (cropped > 0).astype(np.uint8)  # Normalize to binary 0-1
+
+
 @dataclass
 class SegmentationResult:
     crop: Image.Image
@@ -15,6 +37,20 @@ class SegmentationResult:
     bbox: tuple[int, int, int, int]
     confidence: float
     segmentor: str = "unknown"
+
+    @classmethod
+    def from_mask(cls, image: Image.Image, mask: np.ndarray, segmentor: str = "unknown", confidence: float = 1.0):
+        bbox = mask_to_bbox(mask)
+        if bbox is None:
+            return None
+        return cls(
+            crop=create_crop(image, bbox),
+            mask=mask,
+            crop_mask=create_crop_mask(mask, bbox),
+            bbox=bbox,
+            confidence=confidence,
+            segmentor=segmentor,
+        )
 
 class FullImageSegmentor:
     """A fallback segmentor that returns the full image as a single segment."""
@@ -94,12 +130,12 @@ class FursuitSegmentor:
                 if confidence < self.confidence_threshold:
                     continue
 
-                bbox = self._mask_to_bbox(mask)
+                bbox = mask_to_bbox(mask)
                 if bbox is None:
                     continue
 
-                crop = self._create_crop(image, bbox)
-                crop_mask = self._create_crop_mask(mask, bbox)
+                crop = create_crop(image, bbox)
+                crop_mask = create_crop_mask(mask, bbox)
                 segmentation_results.append(SegmentationResult(
                     crop=crop,
                     mask=mask.astype(np.uint8),
@@ -116,22 +152,3 @@ class FursuitSegmentor:
 
         return segmentation_results
 
-    def _mask_to_bbox(self, mask: np.ndarray) -> Optional[tuple[int, int, int, int]]:
-        rows = np.any(mask, axis=1)
-        cols = np.any(mask, axis=0)
-
-        if not np.any(rows) or not np.any(cols):
-            return None
-
-        y_min, y_max = np.where(rows)[0][[0, -1]]
-        x_min, x_max = np.where(cols)[0][[0, -1]]
-
-        return (int(x_min), int(y_min), int(x_max - x_min + 1), int(y_max - y_min + 1))
-
-    def _create_crop(self, image: Image.Image, bbox: tuple[int, int, int, int]) -> Image.Image:
-        x, y, w, h = bbox
-        return image.crop((x, y, x + w, y + h))
-
-    def _create_crop_mask(self, mask: np.ndarray, bbox: tuple[int, int, int, int]) -> np.ndarray:
-        x, y, w, h = bbox
-        return mask[y:y + h, x:x + w].astype(np.uint8)

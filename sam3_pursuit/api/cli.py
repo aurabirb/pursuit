@@ -196,16 +196,13 @@ def _get_isolation_config(args):
 
 def _get_identifier(args):
     from sam3_pursuit.api.identifier import SAM3FursuitIdentifier
-
-    db_path = args.db if hasattr(args, "db") and args.db else Config.DB_PATH
-    index_path = args.index if hasattr(args, "index") and args.index else Config.INDEX_PATH
     isolation_config = _get_isolation_config(args)
     segmentor_model_name = Config.SAM3_MODEL if getattr(args, "segment", True) else None
     segmentor_concept = args.concept if hasattr(args, "concept") and args.concept else Config.DEFAULT_CONCEPT
 
     return SAM3FursuitIdentifier(
-        db_path=db_path,
-        index_path=index_path,
+        db_path=args.db,
+        index_path=args.index,
         isolation_config=isolation_config,
         segmentor_model_name=segmentor_model_name,
         segmentor_concept=segmentor_concept)

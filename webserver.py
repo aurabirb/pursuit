@@ -97,6 +97,8 @@ async def start_server(
     await http_site.start()
     print(f"HTTP server running at http://{h}:{http_port or HTTP_PORT}")
 
+    ssl_context = ssl_context or create_ssl_context()
+
     # Start HTTPS site if SSL context is available
     if ssl_context:
         https_site = web.TCPSite(runner, h, https_port or HTTPS_PORT, ssl_context=ssl_context)

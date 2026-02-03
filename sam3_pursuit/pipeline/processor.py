@@ -44,7 +44,7 @@ class ProcessingPipeline:
             new_w = int(w * target_size / h)
         new_w = max(Config.PATCH_SIZE, (new_w // Config.PATCH_SIZE) * Config.PATCH_SIZE)
         new_h = max(Config.PATCH_SIZE, (new_h // Config.PATCH_SIZE) * Config.PATCH_SIZE)
-        print(f"Resizing image from ({w}, {h}) to ({new_w}, {new_h})")
+        # print(f"Resizing image from ({w}, {h}) to ({new_w}, {new_h})")
         return image.resize((new_w, new_h), Image.Resampling.LANCZOS)
 
     def process(self, image: Image.Image) -> list[ProcessingResult]:

@@ -6,7 +6,7 @@ import { pipeline, env } from 'https://cdn.jsdelivr.net/npm/@xenova/transformers
 
 // Use local models instead of Hugging Face
 env.localModelPath = 'models/';
-env.allowRemoteModels = false;
+env.allowRemoteModels = true;
 
 const STORAGE_KEY = 'fursuit_scanner_state';
 const LABELS = [
@@ -98,6 +98,7 @@ async function loadModel() {
         modelStatus.classList.remove('loading');
         modelStatus.classList.add('ready');
         modelStatus.textContent = 'CLIP model loaded and ready!';
+        updateUI();
 
         setTimeout(() => {
             modelStatus.classList.remove('active');

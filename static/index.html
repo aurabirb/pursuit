@@ -299,47 +299,15 @@
             font-size: 12px;
         }
 
-        .monitor-status.watching {
-            color: #22c55e;
-        }
-
         .monitor-controls {
             display: flex;
             align-items: center;
             gap: 15px;
         }
 
-        .monitor-toggle {
-            display: flex;
-            align-items: center;
-            gap: 8px;
-            cursor: pointer;
-            color: #ccc;
-            font-size: 14px;
-        }
-
-        .monitor-toggle input[type="checkbox"] {
-            width: 18px;
-            height: 18px;
-            cursor: pointer;
-        }
-
         .btn-small {
             padding: 8px 16px;
             font-size: 14px;
-        }
-
-        .api-warning {
-            background: #4a3a1e;
-            padding: 12px 15px;
-            border-radius: 8px;
-            margin-bottom: 20px;
-            font-size: 14px;
-            display: none;
-        }
-
-        .api-warning.active {
-            display: block;
         }
     </style>
 </head>
@@ -355,10 +323,6 @@
         </div>
     </div>
 
-    <div class="api-warning" id="apiWarning">
-        Your browser doesn't support the File System Access API. Folder selection is not available - please use "Select Photos" instead, or try Chrome/Edge.
-    </div>
-
     <div class="model-status" id="modelStatus">
         Loading CLIP model... (first load downloads ~80MB)
     </div>
@@ -369,9 +333,10 @@
                 Select Photos
             </label>
             <input type="file" id="fileInput" multiple accept="image/*">
-            <button class="btn btn-primary" id="selectFolderBtn">
+            <label class="btn btn-primary" for="folderInput" id="selectFolderLabel">
                 Select Folder
-            </button>
+            </label>
+            <input type="file" id="folderInput" webkitdirectory multiple style="display:none">
             <span class="file-count" id="fileCount">No files selected</span>
             <button class="btn btn-primary" id="startBtn" disabled>Start Scan</button>
             <button class="btn btn-secondary" id="pauseBtn" disabled>Pause</button>
@@ -383,11 +348,7 @@
                 <span class="monitor-status" id="monitorStatus"></span>
             </div>
             <div class="monitor-controls">
-                <label class="monitor-toggle">
-                    <input type="checkbox" id="autoMonitor">
-                    <span>Auto-monitor for new files</span>
-                </label>
-                <button class="btn btn-secondary btn-small" id="refreshFolderBtn">Refresh</button>
+                <button class="btn btn-secondary btn-small" id="refreshFolderBtn">Re-select Folder</button>
                 <button class="btn btn-secondary btn-small" id="clearFolderBtn">Clear</button>
             </div>
         </div>

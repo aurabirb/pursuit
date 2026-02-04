@@ -85,7 +85,13 @@ class FursuitSegmentor:
         self.max_detections = max_detections
         self.model_name = model_name or Config.SAM3_MODEL
         self.concept = concept or Config.DEFAULT_CONCEPT
-        self.predictor = self._load_model()
+        self._predictor = None
+
+    @property
+    def predictor(self):
+        if self._predictor is None:
+            self._predictor = self._load_model()
+        return self._predictor
 
     def _load_model(self, save=False):
         from ultralytics.models.sam.predict import SAM3SemanticPredictor

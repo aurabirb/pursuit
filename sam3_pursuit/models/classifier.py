@@ -14,8 +14,8 @@ class ImageClassifier:
     ):
         self.device = device or Config.get_device()
         self.model_name = model_name
-        self.processor = CLIPProcessor.from_pretrained(model_name)
-        self.model = CLIPModel.from_pretrained(model_name).to(self.device)
+        self.processor = CLIPProcessor.from_pretrained(model_name, revision=Config.CLIP_MODEL_REVISION)
+        self.model = CLIPModel.from_pretrained(model_name, revision=Config.CLIP_MODEL_REVISION).to(self.device)
         self.model.eval()
 
     def classify(self, image: Image.Image) -> dict[str, float]:

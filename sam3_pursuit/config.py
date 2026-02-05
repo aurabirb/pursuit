@@ -31,6 +31,7 @@ class Config:
     SAM3_MODEL = "sam3"
     DINOV2_MODEL = "facebook/dinov2-base"
     CLIP_MODEL = "openai/clip-vit-base-patch32"
+    CLIP_MODEL_REVISION = "refs/pr/21" # safetensors model to fix a security issue
     EMBEDDING_DIM = 768
 
     # Classification

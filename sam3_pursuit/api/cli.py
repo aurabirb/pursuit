@@ -653,6 +653,7 @@ def segment_command(args):
     pipeline = CachedProcessingPipeline(segmentor_concept=concept, segmentor_model_name=Config.SAM3_MODEL)
     images = sum([glob(f"{p}/**", recursive=True) if Path(p).is_dir() else [p] for p in args.images], [])
     images = [p for p in images if not Path(p).is_dir()]
+    errors = []
     for n, image_path in enumerate(images):
         progress = f"[{n+1}/{len(images)}]"
         image_path = Path(image_path)
@@ -667,6 +668,7 @@ def segment_command(args):
             image = Image.open(image_path)
             results, mask_reused = pipeline._segment(image, cache_key)
         except Exception as e:
+            errors.append(image_path)
             print(f"Error: {e}")
 
         if args.output_dir:
@@ -681,6 +683,10 @@ def segment_command(args):
         print(f"{progress} Found {len(results)} segment(s){mask_msg}")
         for i, r in enumerate(results):
             print(f"  {i+1}: bbox={r.bbox}, conf={r.confidence:.0%}")
+    if errors:
+        print("Failed images:")
+    for err in errors:
+        print(err)
 
 
 def classify_command(args):

@@ -44,6 +44,8 @@ Examples:
                         help=f"Dataset name (default: {Config.DEFAULT_DATASET}). Sets db/index paths to <name>.db/<name>.index")
     parser.add_argument("--no-segment", "-S", dest="segment", action="store_false", help="Do not use segmentation")
     parser.add_argument("--concept", default=Config.DEFAULT_CONCEPT, help="SAM3 concept")
+    parser.add_argument("--regenerate-masks", action="store_true", help="Force segment mask regeneration")
+
     parser.add_argument("--background", "-bg", default=Config.DEFAULT_BACKGROUND_MODE,
                         choices=["none", "solid", "blur"],
                         help="Background isolation mode (default: solid)")
@@ -451,9 +453,13 @@ def ingest_from_directory(args):
                 yield (character_name, img)
 
     for batch in batched(get_images(), batch_size):
-        print(f"[{total_added}] Batch adding {len(batch)} images to the index...")
         names, images = zip(*batch)
         add_full_image = getattr(args, "add_full_image", True)
+        if args.regenerate_masks:
+            print(f"[{total_added}] Batch regenerating masks for {len(batch)} images...")
+            ingestor.regenerate_mask_cache(list(images), source)
+            continue
+        print(f"[{total_added}] Batch adding {len(batch)} images to the index...")
         added = ingestor.add_images(
             character_names=list(names),
             image_paths=[str(p) for p in images],
@@ -500,6 +506,11 @@ def ingest_from_nfc25(args):
         if args.limit and total_added >= args.limit:
             break
 
+    if args.regenerate_masks:
+        print(f"[{total_added}] Batch regenerating masks for {len(img_paths)} images...")
+        ingestor.regenerate_mask_cache(img_paths, SOURCE_NFC25)
+        return
+
     add_full_image = getattr(args, "add_full_image", True)
     added = ingestor.add_images(
         character_names=char_names,
@@ -541,7 +552,7 @@ def ingest_from_barq(args):
     def _resolve_barq_name(profile_id: str, fallback: str) -> str:
         """Try to resolve a better name from barq cache for placeholder names."""
         try:
-            from download_barq import get_cached_profile, get_folder_name
+            from tools.download_barq import get_cached_profile, get_folder_name
             cached = get_cached_profile(profile_id)
             if cached:
                 # Re-resolve using updated logic
@@ -587,6 +598,10 @@ def ingest_from_barq(args):
         print(f"[{total_added}] Batch adding {len(batch)} images to the index...")
         names, images = zip(*batch)
         add_full_image = getattr(args, "add_full_image", True)
+        if args.regenerate_masks:
+            print(f"[{total_added}] Batch regenerating masks for {len(images)} images...")
+            ingestor.regenerate_mask_cache(list(images), SOURCE_BARQ)
+            continue
         added = ingestor.add_images(
             character_names=list(names),
             image_paths=[str(p) for p in images],
@@ -738,7 +753,7 @@ def download_command(args):
     excluded_post_ids = _get_excluded_post_ids(getattr(args, "exclude_datasets", None))
 
     if args.source == "furtrack":
-        import download_furtrack
+        from tools import download_furtrack
         if args.output_dir:
             download_furtrack.IMAGES_DIR = args.output_dir
         if excluded_post_ids:
@@ -754,7 +769,7 @@ def download_command(args):
 
     elif args.source == "barq":
         import asyncio
-        import download_barq
+        from tools import download_barq
         if args.output_dir:
             download_barq.IMAGES_DIR = args.output_dir
         if excluded_post_ids:

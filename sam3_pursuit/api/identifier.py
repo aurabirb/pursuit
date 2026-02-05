@@ -11,9 +11,8 @@ from PIL import Image
 from sam3_pursuit.config import Config
 from sam3_pursuit.models.preprocessor import IsolationConfig
 from sam3_pursuit.models.segmentor import FullImageSegmentor
-from sam3_pursuit.pipeline.processor import CacheKey, CachedProcessingPipeline, ProcessingResult
+from sam3_pursuit.pipeline.processor import CacheKey, CachedProcessingPipeline
 from sam3_pursuit.storage.database import Database, Detection
-from sam3_pursuit.storage.mask_storage import MaskStorage
 from sam3_pursuit.storage.vector_index import VectorIndex
 
 
@@ -156,6 +155,32 @@ class FursuitIngestor:
         results.sort(key=lambda x: x.confidence, reverse=True)
         return results[:top_k]
 
+    def regenerate_mask_cache(self, image_paths: list[str], source: str) -> int:
+        total = len(image_paths)
+        regenerated_count = 0
+
+        for i, img_path in enumerate(image_paths):
+            post_id = self._extract_post_id(img_path)
+            filename = os.path.basename(img_path)
+
+            try:
+                image = self._load_image(img_path)
+            except Exception as e:
+                print(f"[{i+1}/{total}] Failed to load {filename}: {e}")
+                continue
+
+            cache_key = CacheKey(post_id=post_id, source=source)
+            segmentations, mask_reused = self.pipeline._segment(image, cache_key=cache_key)
+
+            if not mask_reused:
+                regenerated_count += 1
+                print(f"[{i+1}/{total}] Regenerated mask cache for {filename} ({len(segmentations)} segments)")
+            else:
+                print(f"[{i+1}/{total}] No segments found for {filename}, nothing to cache")
+
+        print(f"Mask cache regeneration complete: {regenerated_count} posts processed")
+        return regenerated_count
+
     def add_images(
         self,
         character_names: list[str],
@@ -255,23 +280,26 @@ class FursuitIngestor:
                 mask_reused = False
                 masks_generated_count += len(proc_results)
 
+            full_msg = ""
             if not proc_results:
                 print(f"[{i+1}/{total}] No segments found for {filename}, adding full image as fallback")
+            if not proc_results or add_full_image:
                 fallback_segs = FullImageSegmentor().segment(image)
-                proc_results = self.pipeline._process_segmentations(fallback_segs, mask_reused=False)
+                proc_results += self.pipeline._process_segmentations(fallback_segs, mask_reused=False)
+                full_msg = " +full"
 
-            for j, proc_result in enumerate(proc_results):
-                if save_crops and proc_result.isolated_crop:
+            for j, result in enumerate(proc_results):
+                if save_crops and result.isolated_crop and result.segmentor_model != "full":
                     seg_name = f"{post_id}_seg_{j}"
-                    self._save_debug_crop(proc_result.isolated_crop, seg_name, source=source)
-                pending_embeddings.append(proc_result.embedding.reshape(1, -1))
+                    self._save_debug_crop(result.isolated_crop, seg_name, source=source)
+                pending_embeddings.append(result.embedding.reshape(1, -1))
                 pending_detections.append(new_detection(
-                    post_id, character_name, proc_result.segmentation.bbox,
-                    proc_result.segmentation.confidence, proc_result.segmentor_model,
+                    post_id, character_name, result.segmentation.bbox,
+                    result.segmentation.confidence, result.segmentor_model,
                     filename, seg_preproc))
 
             mask_msg = " (masks reused)" if mask_reused else ""
-            print(f"[{i+1}/{total}] {character_name}: {len(proc_results)} segments{mask_msg}")
+            print(f"[{i+1}/{total}] {character_name}: {len(proc_results)} segments{mask_msg}{full_msg}")
 
             if len(pending_embeddings) >= batch_size:
                 flush_batch()

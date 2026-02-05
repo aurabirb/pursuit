@@ -50,7 +50,7 @@ class ProcessingPipeline:
         else:
             self.segmentor = FullImageSegmentor()
         self.segmentor_model_name = self.segmentor.model_name
-        self.segmentor_concept = segmentor_concept
+        self.segmentor_concept = segmentor_concept or ""
         self.embedder_model_name = Config.DINOV2_MODEL
         self.embedder = FursuitEmbedder(device=self.device, model_name=self.embedder_model_name)
         self.isolator = BackgroundIsolator(isolation_config)
@@ -129,6 +129,7 @@ class CachedProcessingPipeline(ProcessingPipeline):
         segmentations = [
             SegmentationResult.from_mask(image, mask, segmentor=self.segmentor_model_name) for mask in masks
         ]
+        segmentations = [s for s in segmentations if s]
         return segmentations
 
     def _save_segments_for_post(self, post_id: str, source: str, model: str, concept: str, segmentations: list[SegmentationResult]) -> None:

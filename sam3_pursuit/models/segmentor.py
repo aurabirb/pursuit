@@ -58,7 +58,7 @@ class FullImageSegmentor:
         self.model_name = "full"
 
     def segment(self, image: Image.Image) -> list[SegmentationResult]:
-        print("Using FullImageSegmentor: returning full image as single segment")
+        # print("Using FullImageSegmentor: returning full image as single segment")
         w, h = image.size
         full_mask = np.ones((h, w), dtype=np.uint8)
         return [SegmentationResult(

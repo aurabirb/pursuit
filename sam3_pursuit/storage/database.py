@@ -96,6 +96,7 @@ class Database:
         self.db_path = db_path
         self._conn: Optional[sqlite3.Connection] = None
         self._init_database()
+        print(f"DB initialized: {db_path}")
 
     def _connect(self) -> sqlite3.Connection:
         if self._conn is None:
@@ -305,7 +306,7 @@ class Database:
 
     @retry_on_locked()
     def get_posts_needing_update(
-        self, post_ids: list[str], preprocessing_info: str, source: Optional[str] = None
+        self, post_ids: list[str], preprocessing_info: str, source: str
     ) -> set[str]:
         """Return post_ids not yet processed with given preprocessing_info and source."""
         if not post_ids or not preprocessing_info:
@@ -313,16 +314,12 @@ class Database:
         conn = self._connect()
         c = conn.cursor()
         placeholders = ",".join("?" * len(post_ids))
-        if source:
-            c.execute(
-                f"SELECT DISTINCT post_id FROM detections WHERE post_id IN ({placeholders}) AND preprocessing_info = ? AND source = ?",
-                (*post_ids, preprocessing_info, source)
-            )
-        else:
-            c.execute(
-                f"SELECT DISTINCT post_id FROM detections WHERE post_id IN ({placeholders}) AND preprocessing_info = ?",
-                (*post_ids, preprocessing_info)
-            )
+
+        c.execute(
+            f"SELECT DISTINCT post_id FROM detections WHERE post_id IN ({placeholders}) AND preprocessing_info = ? AND source = ?",
+            (*post_ids, preprocessing_info, source)
+        )
+
         return set(post_ids) - {row[0] for row in c.fetchall()}
 
     @retry_on_locked()

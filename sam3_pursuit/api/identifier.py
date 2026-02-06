@@ -76,19 +76,19 @@ class FursuitIngestor:
 
     def _build_preprocessing_info(self) -> str:
         """Build fingerprint for segmented crops."""
-        iso = self.pipeline.isolation_config
-        mode_map = {"solid": "s", "blur": "b", "none": "n"}
-        parts = [
-            "v2",
-            f"seg:{self.pipeline.segmentor_model_name}",
-            f"con:{(self.pipeline.segmentor_concept or '').replace('|', '.')}",
-            f"bg:{mode_map.get(iso.mode, 'n')}",
-        ]
-        if iso.mode == "solid":
-            r, g, b = iso.background_color
-            parts.append(f"bgc:{r:02x}{g:02x}{b:02x}")
-        elif iso.mode == "blur":
-            parts.append(f"br:{iso.blur_radius}")
+        parts = ["v2", f"seg:{self.pipeline.segmentor_model_name}"]
+        if self.pipeline.segmentor_model_name != "full":
+            iso = self.pipeline.isolation_config
+            mode_map = {"solid": "s", "blur": "b", "none": "n"}
+            parts += [
+                f"con:{(self.pipeline.segmentor_concept or '').replace('|', '.')}",
+                f"bg:{mode_map.get(iso.mode, 'n')}",
+            ]
+            if iso.mode == "solid":
+                r, g, b = iso.background_color
+                parts += [f"bgc:{r:02x}{g:02x}{b:02x}"]
+            elif iso.mode == "blur":
+                parts += [f"br:{iso.blur_radius}"]
         parts += [f"emb:{self._short_embedder_name()}", f"tsz:{Config.TARGET_IMAGE_SIZE}"]
         return "|".join(parts)
 
@@ -296,7 +296,7 @@ class FursuitIngestor:
                 pending_detections.append(new_detection(
                     post_id, character_name, result.segmentation.bbox,
                     result.segmentation.confidence, result.segmentor_model,
-                    filename, seg_preproc))
+                    filename, seg_preproc if result.segmentor_model != "full" else full_preproc))
 
             mask_msg = " (masks reused)" if mask_reused else ""
             print(f"[{i+1}/{total}] {character_name}: {len(proc_results)} segments{mask_msg}{full_msg}")

@@ -744,7 +744,7 @@ def download_command(args):
     excluded_post_ids = _get_excluded_post_ids(getattr(args, "exclude_datasets", ""))
 
     if args.source == "furtrack":
-        from tools.download_furtrack import download_furtrack
+        from tools import download_furtrack
         if args.output_dir:
             download_furtrack.IMAGES_DIR = args.output_dir
         if excluded_post_ids:
@@ -760,7 +760,7 @@ def download_command(args):
 
     elif args.source == "barq":
         import asyncio
-        from tools.download_barq import download_barq
+        from tools import download_barq
         if args.output_dir:
             download_barq.IMAGES_DIR = args.output_dir
         if excluded_post_ids:

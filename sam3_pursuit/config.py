@@ -24,7 +24,6 @@ class Config:
     MASKS_DIR = os.path.join(BASE_DIR, DEFAULT_MASKS_DIR)
     MASKS_INGEST_DIR = os.path.join(BASE_DIR, DEFAULT_MASKS_DIR, "ingest")
     MASKS_SEARCH_DIR = os.path.join(BASE_DIR, DEFAULT_MASKS_DIR, "search")
-    IMAGES_DIR = os.path.join(BASE_DIR, "furtrack_images")
 
     # Models
     SAM3_VRAM_REQUIRED_GB = 4  # SAM3 needs ~4GB VRAM

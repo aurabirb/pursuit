@@ -734,12 +734,10 @@ def download_command(args):
     """Handle download command."""
     sys.path.insert(0, str(Path(__file__).parent.parent.parent / "tools"))
 
-    # When downloading to a non-default dataset, auto-configure paths and exclusions
+    # When downloading to a non-default dataset, auto-configure paths
     if args.dataset != Config.DEFAULT_DATASET:
-        if not args.output_dir or args.output_dir in ("furtrack_images", "barq_images"):
+        if not args.output_dir:
             args.output_dir = f"datasets/{args.dataset}/{args.source}"
-        if not getattr(args, "exclude_datasets", None):
-            args.exclude_datasets = Config.DEFAULT_DATASET
 
     excluded_post_ids = _get_excluded_post_ids(getattr(args, "exclude_datasets", ""))
 

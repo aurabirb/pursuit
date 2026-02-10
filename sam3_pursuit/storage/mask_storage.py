@@ -69,11 +69,12 @@ class MaskStorage:
         results: list[SegmentationResult] = []
         confs: list[float] = []
         mask_dir = self.get_mask_dir(source, model, concept)
-        conffile = Path(mask_dir / "confidences")
+        conffile = Path(mask_dir / f"{post_id}.conffile")
         if conffile.exists():
             with open(conffile, 'rb') as f:
                 content = f.read()
-                size = len(content) / struct.calcsize('d')
+                print(f'{len(content)} // {struct.calcsize("d")}')
+                size = len(content) // struct.calcsize('d')
                 confs = list(struct.unpack(f'{size}d', content))
         masks = self.find_masks_for_post(post_id, source, model, concept)
         if len(masks) > 0 and len(confs) != len(masks):
@@ -95,7 +96,7 @@ class MaskStorage:
             results.append(SegmentationResult(
                     crop=None,
                     mask=mask.astype(np.uint8),
-                    crop_mask=crop_mask,
+                    crop_mask=crop_mask.astype(np.uint8),
                     bbox=bbox,
                     confidence=confs[i] if confs else 1.0,
                     segmentor=model,
@@ -104,8 +105,8 @@ class MaskStorage:
 
     def save_segs_for_post(self, post_id: str, source: str, model: str, concept: str, segs: list[SegmentationResult]) -> list[str]:
         paths = []
-        with open(self.get_mask_dir(source, model, concept) / "confidences", 'wb') as f:
-            f.write(bytearray(struct.pack(f'{len(segs)}d', [s.confidence for s in segs])))
+        with open(self.get_mask_dir(source, model, concept) / f"{post_id}.conffile", 'wb') as f:
+            f.write(bytearray(struct.pack(f'{len(segs)}d', *[s.confidence for s in segs])))
         for i, mask in enumerate([s.mask for s in segs]):
             name = f"{post_id}_seg_{i}"
             path = self.save_mask(mask, name, source, model, concept)

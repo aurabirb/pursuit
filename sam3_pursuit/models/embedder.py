@@ -44,10 +44,11 @@ class CLIPEmbedder:
     def embed(self, image: Image.Image) -> np.ndarray:
         inputs = self.processor(images=image, return_tensors="pt").to(self.device)
         with torch.no_grad():
-            features = self.model.get_image_features(**inputs)
-            features = features / features.norm(dim=-1, keepdim=True)
+            vision_outputs = self.model.vision_model(**inputs)
+            pooled = vision_outputs.pooler_output
+            projected = self.model.visual_projection(pooled)
+            features = projected / projected.norm(dim=-1, keepdim=True)
         return features.cpu().numpy().flatten()
-
 
 class SigLIPEmbedder:
     def __init__(self, device: Optional[str] = None, model_name: str = Config.SIGLIP_MODEL):

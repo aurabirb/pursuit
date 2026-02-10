@@ -313,14 +313,19 @@ class Database:
             return set(post_ids)
         conn = self._connect()
         c = conn.cursor()
-        placeholders = ",".join("?" * len(post_ids))
+        already_processed = set()
+        # SQLite has a variable limit (default 999), batch to stay under it
+        batch_size = 900
+        for i in range(0, len(post_ids), batch_size):
+            batch = post_ids[i:i + batch_size]
+            placeholders = ",".join("?" * len(batch))
+            c.execute(
+                f"SELECT DISTINCT post_id FROM detections WHERE post_id IN ({placeholders}) AND preprocessing_info = ? AND source = ?",
+                (*batch, preprocessing_info, source)
+            )
+            already_processed.update(row[0] for row in c.fetchall())
 
-        c.execute(
-            f"SELECT DISTINCT post_id FROM detections WHERE post_id IN ({placeholders}) AND preprocessing_info = ? AND source = ?",
-            (*post_ids, preprocessing_info, source)
-        )
-
-        return set(post_ids) - {row[0] for row in c.fetchall()}
+        return set(post_ids) - already_processed
 
     @retry_on_locked()
     def get_next_embedding_id(self) -> int:

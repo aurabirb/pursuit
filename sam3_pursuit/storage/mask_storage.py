@@ -65,7 +65,7 @@ class MaskStorage:
         mask_dir = self.get_mask_dir(source, model, concept)
         return sorted(mask_dir.glob(f"{post_id}_seg_*.png"), key=lambda p: int(p.stem.split("_seg_")[-1]))
 
-    def load_segs_for_post(self, post_id: str, source: str, model: str, concept: str):
+    def load_segs_for_post(self, post_id: str, source: str, model: str, concept: str, force_conf: bool = False):
         results: list[SegmentationResult] = []
         confs: list[float] = []
         mask_dir = self.get_mask_dir(source, model, concept)
@@ -78,6 +78,8 @@ class MaskStorage:
         masks = self.find_masks_for_post(post_id, source, model, concept)
         if len(masks) > 0 and len(confs) != len(masks):
             print(f"WARN: confidence file mismatch: {conffile}")
+            if force_conf:
+                return []
             confs = []
         for i, path in enumerate(masks):
             name = path.stem

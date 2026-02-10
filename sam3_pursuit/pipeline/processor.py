@@ -145,9 +145,9 @@ class CachedProcessingPipeline:
     def _load_segments_for_post(self, post_id: str, source: str, model: str, concept: str, image: Image.Image) -> list[SegmentationResult]:
         if self.mask_storage.has_no_segments_marker(post_id, source, model, concept):
             return FullImageSegmentor().segment(image)
-        segs = self.mask_storage.load_segs_for_post(post_id, source, model, concept)
+        segs = self.mask_storage.load_segs_for_post(post_id, source, model, concept, force_conf=True)
         segmentations = [
-            SegmentationResult.from_mask(image, seg.mask, segmentor=self.segmentor.model_name) for seg in segs
+            SegmentationResult.from_mask(image, seg.mask, segmentor=self.segmentor.model_name, confidence=seg.confidence) for seg in segs
         ]
         segmentations = [s for s in segmentations if s]
         return segmentations

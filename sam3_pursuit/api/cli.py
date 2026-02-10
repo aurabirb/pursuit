@@ -96,7 +96,7 @@ Examples:
     segment_parser = subparsers.add_parser("segment", help="Test segmentation on an image")
     segment_parser.add_argument("images", nargs="+", help="Image paths")
     segment_parser.add_argument("--output-dir", "-o", help="Output directory for crops")
-    segment_parser.add_argument("--cache", action="store_true", help="Read and write segments cache")
+    segment_parser.add_argument("--cache-masks", action="store_true", help="Read and write masks cache")
     segment_parser.add_argument("--source", "-s", required='--cache' in sys.argv, choices=SOURCES_AVAILABLE)
 
     classify_parser = subparsers.add_parser("classify", help="Classify images as fursuit or not")
@@ -650,7 +650,7 @@ def segment_command(args):
             sys.exit(1)
 
         post_id = FursuitIngestor._extract_post_id(str(image_path))
-        cache_key = None if not args.cache else CacheKey(post_id, source)
+        cache_key = None if not args.cache_masks else CacheKey(post_id, source)
         try:
             image = Image.open(image_path)
             results, mask_reused = pipeline._segment(image, cache_key)

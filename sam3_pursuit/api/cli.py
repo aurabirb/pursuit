@@ -736,7 +736,7 @@ def download_command(args):
 
     # When downloading to a non-default dataset, auto-configure paths
     if args.dataset != Config.DEFAULT_DATASET:
-        if not args.output_dir:
+        if not args.output_dir or (args.output_dir in ("furtrack_images", "barq_images",)):
             args.output_dir = f"datasets/{args.dataset}/{args.source}"
 
     excluded_post_ids = _get_excluded_post_ids(getattr(args, "exclude_datasets", ""))

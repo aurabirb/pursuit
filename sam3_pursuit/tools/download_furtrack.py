@@ -217,6 +217,7 @@ def download_character(char: str, max_images: int = MAX_IMAGES_PER_CHAR) -> int:
 
     # Check existing downloads
     existing = get_existing_images(char_folder)
+    print(f"Found {len(existing)} images for {char_folder}")
     if len(existing) >= max_images:
         return 0
 

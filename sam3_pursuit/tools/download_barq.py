@@ -416,7 +416,7 @@ def clean_images(score_fn, threshold: float):
 
     # Get all images on disk
     all_images = list(images_dir.glob("*/*.jpg"))
-    print(f"Found {len(all_images)} images on disk")
+    print(f"Found {len(all_images)} images on disk ({images_dir})")
 
     if not all_images:
         print("Nothing to clean")

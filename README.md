@@ -4,6 +4,7 @@ Available on Telegram as [@furspybot](https://t.me/furspybot) and other names.
 ## Read [CLAUDE.md](CLAUDE.md) for a description of this project
 
 ## TODO:
+- [ ] There is a bug with the saved masks always having a confidence of 100%
 - [x] Keep metadata of which dataset and when the photo was ingested in the database
 - [x] Create an ingestor to parse BARQ webapp fursuit pictures to a new dataset
 - [x] Create a validation dataset from pictures that have not been downloaded from furtrack (we only download 2 out of many for each characters)

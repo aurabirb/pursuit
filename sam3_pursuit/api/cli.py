@@ -142,6 +142,12 @@ Examples:
                         help="Background color as R,G,B for solid mode (default: 128,128,128)")
     parser.add_argument("--blur-radius", type=int, default=Config.DEFAULT_BLUR_RADIUS,
                         help="Blur radius for blur mode (default: 25)")
+    parser.add_argument("--embedder", "-emb",
+                        choices=["dinov2-base", "dinov2-large", "clip", "siglip", "dinov2-base+colorhist"],
+                        default="dinov2-base",
+                        help="Embedder model (default: dinov2-base)")
+    parser.add_argument("--grayscale", "-gray", action="store_true",
+                        help="Apply grayscale preprocessing before embedding")
 
     subparsers = parser.add_subparsers(dest="command", help="Command to run")
 
@@ -301,18 +307,51 @@ def _get_isolation_config(args):
     )
 
 
+def _build_embedder(args):
+    """Build embedder from CLI args. Returns (embedder, None) or None for default."""
+    embedder_name = getattr(args, "embedder", "dinov2-base")
+    if embedder_name == "dinov2-base":
+        return None  # use pipeline default
+    if embedder_name == "dinov2-large":
+        from sam3_pursuit.models.embedder import FursuitEmbedder
+        return FursuitEmbedder(model_name=Config.DINOV2_LARGE_MODEL)
+    if embedder_name == "clip":
+        from sam3_pursuit.models.embedder import CLIPEmbedder
+        return CLIPEmbedder()
+    if embedder_name == "siglip":
+        from sam3_pursuit.models.embedder import SigLIPEmbedder
+        return SigLIPEmbedder()
+    if embedder_name == "dinov2-base+colorhist":
+        from sam3_pursuit.models.embedder import FursuitEmbedder, ColorHistogramEmbedder
+        return ColorHistogramEmbedder(FursuitEmbedder())
+    return None
+
+
+def _build_preprocessors(args):
+    """Build preprocessor list from CLI args."""
+    preprocessors = []
+    if getattr(args, "grayscale", False):
+        from sam3_pursuit.models.preprocessor import grayscale_preprocessor
+        preprocessors.append(grayscale_preprocessor)
+    return preprocessors or None
+
+
 def _get_ingestor(args):
     from sam3_pursuit.api.identifier import FursuitIngestor
     isolation_config = _get_isolation_config(args)
     segmentor_model_name = Config.SAM3_MODEL if getattr(args, "segment", True) else None
     segmentor_concept = args.concept if hasattr(args, "concept") and args.concept else Config.DEFAULT_CONCEPT
+    embedder = _build_embedder(args)
+    preprocessors = _build_preprocessors(args)
 
     return FursuitIngestor(
         db_path=args.db,
         index_path=args.index,
         isolation_config=isolation_config,
         segmentor_model_name=segmentor_model_name,
-        segmentor_concept=segmentor_concept)
+        segmentor_concept=segmentor_concept,
+        embedder=embedder,
+        preprocessors=preprocessors)
 
 
 def _get_excluded_post_ids(exclude_datasets: str) -> set[str]:
@@ -944,7 +983,7 @@ def evaluate_command(args):
             continue
 
         # Reconstruct embedding
-        embedding = np.zeros(Config.EMBEDDING_DIM, dtype=np.float32)
+        embedding = np.zeros(from_index.embedding_dim, dtype=np.float32)
         from_index.index.reconstruct(emb_id, embedding)
 
         # Query against dataset
@@ -1112,7 +1151,7 @@ def _copy_detections(detections, source_index, target_db, target_index, batch_si
         if det.embedding_id >= source_index.size:
             skipped += 1
             continue
-        embedding = np.zeros(Config.EMBEDDING_DIM, dtype=np.float32)
+        embedding = np.zeros(source_index.embedding_dim, dtype=np.float32)
         source_index.index.reconstruct(det.embedding_id, embedding)
 
         # Remap embedding_id

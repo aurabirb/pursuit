@@ -44,9 +44,12 @@ class FursuitIngestor:
         segmentor_model_name: Optional[str] = "",
         segmentor_concept: Optional[str] = "",
         mask_storage = MaskStorage(),
+        embedder = None,
+        preprocessors: Optional[list] = None,
     ):
         self.db = Database(db_path)
-        self.index = VectorIndex(index_path)
+        embedding_dim = embedder.embedding_dim if embedder else Config.EMBEDDING_DIM
+        self.index = VectorIndex(index_path, embedding_dim=embedding_dim)
         self._sync_index_and_db()
         self.pipeline = CachedProcessingPipeline(
             device=device,
@@ -54,6 +57,8 @@ class FursuitIngestor:
             segmentor_model_name=segmentor_model_name,
             segmentor_concept=segmentor_concept,
             mask_storage=mask_storage,
+            embedder=embedder,
+            preprocessors=preprocessors,
         )
         self.fallback_pipeline = CachedProcessingPipeline(
             device=device,
@@ -61,6 +66,8 @@ class FursuitIngestor:
             segmentor_model_name="full",
             segmentor_concept="",
             mask_storage=mask_storage,
+            embedder=embedder,
+            preprocessors=preprocessors,
         )
 
 

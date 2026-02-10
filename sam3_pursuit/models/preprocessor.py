@@ -1,5 +1,5 @@
 from dataclasses import dataclass
-from typing import Optional
+from typing import Callable, Optional
 
 import numpy as np
 from PIL import Image, ImageFilter
@@ -51,3 +51,10 @@ class BackgroundIsolator:
         blurred_rgba = blurred.convert("RGBA")
         alpha = Image.fromarray((mask * 255).astype(np.uint8), mode='L')
         return Image.composite(crop_rgba, blurred_rgba, alpha).convert("RGB")
+
+
+def grayscale_preprocessor(image: Image.Image) -> Image.Image:
+    """Convert image to grayscale (removes color information)."""
+    return image.convert("L").convert("RGB")
+
+grayscale_preprocessor.short_name = "gray"

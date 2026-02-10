@@ -29,9 +29,12 @@ class Config:
     SAM3_VRAM_REQUIRED_GB = 4  # SAM3 needs ~4GB VRAM
     SAM3_MODEL = "sam3"
     DINOV2_MODEL = "facebook/dinov2-base"
+    DINOV2_LARGE_MODEL = "facebook/dinov2-large"
     CLIP_MODEL = "openai/clip-vit-base-patch32"
     CLIP_MODEL_REVISION = "refs/pr/21" # safetensors model to fix a security issue
+    SIGLIP_MODEL = "google/siglip-base-patch16-224"
     EMBEDDING_DIM = 768
+    COLOR_HIST_BINS = 64
 
     # Classification
     CLASSIFY_FURSUIT_LABELS = {"a photo of a fursuit", "a photo of an animal costume", "a photo of a mascot"}

@@ -1,7 +1,7 @@
 """Processing pipeline: segmentation, isolation, embedding."""
 
 from dataclasses import dataclass
-from typing import Optional
+from typing import Callable, Optional
 
 import numpy as np
 from PIL import Image
@@ -44,6 +44,8 @@ class CachedProcessingPipeline:
         segmentor_model_name: Optional[str] = "",
         segmentor_concept: Optional[str] = "",
         mask_storage = MaskStorage(),
+        embedder = None,
+        preprocessors: Optional[list[Callable[[Image.Image], Image.Image]]] = None,
     ):
         self.device = device or Config.get_device()
         self.mask_storage = mask_storage
@@ -53,20 +55,36 @@ class CachedProcessingPipeline:
         else:
             self.segmentor = FullImageSegmentor()
         self.segmentor_concept = segmentor_concept or ""
-        self.embedder_model_name = Config.DINOV2_MODEL
-        self.embedder = FursuitEmbedder(device=self.device, model_name=self.embedder_model_name)
+        if embedder is not None:
+            self.embedder = embedder
+            self.embedder_model_name = embedder.model_name
+        else:
+            self.embedder_model_name = Config.DINOV2_MODEL
+            self.embedder = FursuitEmbedder(device=self.device, model_name=self.embedder_model_name)
+        self.preprocessors = preprocessors or []
         self.isolator = BackgroundIsolator(isolation_config)
         self.isolation_config = self.isolator.config
 
 
     def _short_embedder_name(self) -> str:
         emb = self.embedder_model_name
+        if "+colorhist" in emb:
+            base = emb.replace("+colorhist", "")
+            return self._short_name_for(base) + "+chist"
+        return self._short_name_for(emb)
+
+    @staticmethod
+    def _short_name_for(emb: str) -> str:
         if "dinov2-base" in emb:
             return "dv2b"
         elif "dinov2-large" in emb:
             return "dv2l"
         elif "dinov2-giant" in emb:
             return "dv2g"
+        elif "clip-vit-base" in emb:
+            return "clip"
+        elif "siglip" in emb:
+            return "siglip"
         return emb.split("/")[-1][:8]
 
     def build_preprocessing_info(self) -> str:
@@ -84,6 +102,9 @@ class CachedProcessingPipeline:
                 parts += [f"bgc:{r:02x}{g:02x}{b:02x}"]
             elif iso.mode == "blur":
                 parts += [f"br:{iso.blur_radius}"]
+        if self.preprocessors:
+            pp_names = [getattr(pp, "short_name", getattr(pp, "__name__", type(pp).__name__)) for pp in self.preprocessors]
+            parts += [f"pp:{'+'.join(pp_names)}"]
         parts += [f"emb:{self._short_embedder_name()}", f"tsz:{Config.TARGET_IMAGE_SIZE}"]
         return "|".join(parts)
 
@@ -95,6 +116,8 @@ class CachedProcessingPipeline:
             preprocessing_info = self.build_preprocessing_info()
             isolated = self.isolator.isolate(seg.crop, seg.crop_mask)
             isolated_crop = self._resize_to_patch_multiple(isolated)
+            for pp in self.preprocessors:
+                isolated_crop = pp(isolated_crop)
             embedding = self.embedder.embed(isolated_crop)
             proc_results.append(ProcessingResult(
                 segmentation=seg,

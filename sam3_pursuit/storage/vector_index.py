@@ -21,6 +21,8 @@ class VectorIndex:
         self.ef_construction = ef_construction
         self.ef_search = ef_search
         self.index = self._load_or_create_index()
+        # Update embedding_dim from loaded index (may differ from constructor default)
+        self.embedding_dim = self.index.d
 
     def _load_or_create_index(self) -> faiss.IndexHNSWFlat:
         if os.path.exists(self.index_path):

@@ -26,7 +26,9 @@ load_dotenv()
 
 from sam3_pursuit import FursuitIngestor, Config
 from sam3_pursuit.api.annotator import annotate_image
-from sam3_pursuit.storage.database import SOURCE_TGBOT, get_git_version, get_source_url
+from telegram import InputMediaPhoto
+
+from sam3_pursuit.storage.database import SOURCE_TGBOT, get_git_version, get_source_url, get_source_image_url
 
 # Pattern to match "character:Name" in caption
 CHARACTER_PATTERN = re.compile(r"character:(\S+)", re.IGNORECASE)
@@ -261,6 +263,70 @@ async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
     )
 
 
+MAX_EXAMPLES = 10
+
+
+async def examples(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """Handle /examples command - show example images of a character."""
+    if not context.args:
+        await context.bot.send_message(
+            chat_id=update.effective_chat.id,
+            text="Usage: /examples CharacterName"
+        )
+        return
+
+    character_name = " ".join(context.args)
+    try:
+        ingestor = get_ingestor()
+        detections = ingestor.db.get_detections_by_character(character_name)
+
+        if not detections:
+            await context.bot.send_message(
+                chat_id=update.effective_chat.id,
+                text=f"No detections found for '{character_name}'."
+            )
+            return
+
+        # Collect unique image URLs (one per post)
+        seen_posts = set()
+        media = []
+        for det in detections:
+            if det.post_id in seen_posts:
+                continue
+            url = get_source_image_url(det.source, det.post_id)
+            if not url:
+                continue
+            seen_posts.add(det.post_id)
+            page_url = get_source_url(det.source, det.post_id)
+            caption = f"{character_name} ({det.source})"
+            if page_url:
+                caption = f"<a href=\"{page_url}\">{character_name}</a> ({det.source})"
+            media.append(InputMediaPhoto(media=url, caption=caption, parse_mode="HTML"))
+            if len(media) >= MAX_EXAMPLES:
+                break
+
+        if not media:
+            await context.bot.send_message(
+                chat_id=update.effective_chat.id,
+                text=f"No linkable images found for '{character_name}' (only manual/tgbot sources)."
+            )
+            return
+
+        # Telegram allows max 10 media per group, send in batches
+        for i in range(0, len(media), 10):
+            await context.bot.send_media_group(
+                chat_id=update.effective_chat.id,
+                media=media[i:i+10],
+            )
+
+    except Exception as e:
+        print(f"Error in examples: {e}", file=sys.stderr)
+        await context.bot.send_message(
+            chat_id=update.effective_chat.id,
+            text=f"Error: {e}"
+        )
+
+
 async def stats(update: Update, context: ContextTypes.DEFAULT_TYPE):
     """Handle /stats command."""
     try:
@@ -322,6 +388,7 @@ def build_application(token: str):
     app.add_handler(MessageHandler((~filters.COMMAND) & filters.TEXT & filters.REPLY, reply_to_photo))
     app.add_handler(CommandHandler("start", start))
     app.add_handler(CommandHandler("stats", stats))
+    app.add_handler(CommandHandler("examples", examples))
     app.add_handler(CommandHandler("whodis", whodis))
     app.add_handler(CommandHandler("furspy", whodis))
     app.add_handler(CommandHandler("aitool", aitool.handle_aitool))

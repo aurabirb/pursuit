@@ -26,7 +26,7 @@ load_dotenv()
 
 from sam3_pursuit import FursuitIngestor, Config
 from sam3_pursuit.api.annotator import annotate_image
-from sam3_pursuit.storage.database import SOURCE_TGBOT, get_git_version
+from sam3_pursuit.storage.database import SOURCE_TGBOT, get_git_version, get_source_url
 
 # Pattern to match "character:Name" in caption
 CHARACTER_PATTERN = re.compile(r"character:(\S+)", re.IGNORECASE)
@@ -153,7 +153,12 @@ async def identify_and_send(context: ContextTypes.DEFAULT_TYPE, chat_id: int,
             continue
         lines.append(f"Segment {i}:")
         for n, m in enumerate(filtered):
-            lines.append(f"  {n+1}. {m.character_name or 'Unknown'} ({m.confidence*100:.1f}%)")
+            url = get_source_url(m.source, m.post_id)
+            name = m.character_name or 'Unknown'
+            if url:
+                lines.append(f"  {n+1}. <a href=\"{url}\">{name}</a> ({m.confidence*100:.1f}%)")
+            else:
+                lines.append(f"  {n+1}. {name} ({m.confidence*100:.1f}%)")
 
     if not lines:
         await context.bot.send_message(**reply_kwargs, text=f"No matches above {min_confidence:.0%} confidence.")
@@ -170,7 +175,8 @@ async def identify_and_send(context: ContextTypes.DEFAULT_TYPE, chat_id: int,
 
     with open(temp_annotated_path, 'rb') as photo_file:
         await context.bot.send_photo(**reply_kwargs, photo=photo_file)
-    await context.bot.send_message(**reply_kwargs, text=msg)
+    await context.bot.send_message(**reply_kwargs, text=msg, parse_mode="HTML",
+                                    disable_web_page_preview=True)
     os.unlink(temp_annotated_path)
 
 

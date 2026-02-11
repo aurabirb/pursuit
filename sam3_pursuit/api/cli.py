@@ -116,6 +116,7 @@ Examples:
     parser.add_argument("--dataset", "-d", "-ds", default=Config.DEFAULT_DATASET,
                         help=f"Dataset name (default: {Config.DEFAULT_DATASET}). Sets db/index paths to <name>.db/<name>.index")
     parser.add_argument("--no-segment", "-S", dest="segment", action="store_false", help="Do not use segmentation")
+    parser.add_argument("--device", choices=["cuda", "cpu", "mps"], help="CUDA device for segmentation")
     parser.add_argument("--concept", default=Config.DEFAULT_CONCEPT, help="SAM3 concept")
     parser.add_argument("--background", "-bg", default=Config.DEFAULT_BACKGROUND_MODE,
                         choices=["none", "solid", "blur"],
@@ -988,7 +989,7 @@ def segment_command(args):
 
     concept = getattr(args, "concept", None) or Config.DEFAULT_CONCEPT
     source = args.source or "unknown"
-    pipeline = CachedProcessingPipeline(segmentor_concept=concept, segmentor_model_name=Config.SAM3_MODEL)
+    pipeline = CachedProcessingPipeline(device=getattr(args, "device"), segmentor_concept=concept, segmentor_model_name=Config.SAM3_MODEL)
     images = sum([glob(f"{p}/**", recursive=True) if Path(p).is_dir() else [p] for p in args.images], [])
     images = [p for p in images if not Path(p).is_dir()]
     errors = []

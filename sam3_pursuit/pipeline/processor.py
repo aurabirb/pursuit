@@ -64,9 +64,9 @@ class CachedProcessingPipeline:
         embedder = None,
         preprocessors: Optional[list[Callable[[Image.Image], Image.Image]]] = None,
     ):
-        self.device = device or Config.get_device()
+        self.device = Config.get_device()
         self.mask_storage = mask_storage
-        segmentor_device = Config.get_segmentor_device()
+        segmentor_device = device or Config.get_segmentor_device()
         if segmentor_model_name == Config.SAM3_MODEL:
             self.segmentor = SAM3FursuitSegmentor(device=segmentor_device, concept=segmentor_concept)
         else:

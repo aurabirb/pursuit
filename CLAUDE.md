@@ -250,38 +250,52 @@ python tgbot.py
 ## Python API
 
 ```python
-from sam3_pursuit import FursuitIdentifier, FursuitIngestor
+from sam3_pursuit import FursuitIdentifier, FursuitIngestor, create_identifiers
 from sam3_pursuit.models.preprocessor import IsolationConfig
 from sam3_pursuit.config import Config
 from PIL import Image
 
 # --- Identification (read-only, supports multiple datasets) ---
 
-# Single dataset
+# Single dataset (datasets is required)
 identifier = FursuitIdentifier(
     datasets=[(Config.DB_PATH, Config.INDEX_PATH)],
 )
 
-# Multiple datasets (searches all, merges results)
+# Multiple datasets with same embedder (searches all, merges results)
 identifier = FursuitIdentifier(
     datasets=[("pursuit.db", "pursuit.index"), ("validation.db", "validation.index")],
 )
 
-# Identify character in image
+# Auto-discover datasets and group by embedder (one identifier per embedder)
+# This is the recommended way when datasets may use different embedders.
+identifiers = create_identifiers()  # discovers *.db/*.index in Config.BASE_DIR
+
+# Identify across all identifiers (segmentation is cached after the first)
 image = Image.open("photo.jpg")
-results = identifier.identify(image, top_k=5)
+all_results = [ident.identify(image, top_k=5) for ident in identifiers]
+
+# Merge results per segment
+results = all_results[0] if all_results else []
+for other in all_results[1:]:
+    for seg, other_seg in zip(results, other):
+        seg.matches.extend(other_seg.matches)
+        seg.matches.sort(key=lambda x: x.confidence, reverse=True)
+        seg.matches = seg.matches[:5]
 
 for segment in results:
     print(f"Segment {segment.segment_index} at {segment.segment_bbox}:")
     for match in segment.matches:
         print(f"  {match.character_name}: {match.confidence:.1%}")
 
-# Search by text (CLIP/SigLIP embedder only)
-results = identifier.search_text("blue fox with white markings", top_k=5)
-for match in results:
-    print(f"  {match.character_name}: {match.confidence:.1%}")
+# Search by text (only works on identifiers with CLIP/SigLIP embedder)
+text_identifiers = [i for i in identifiers if hasattr(i.pipeline.embedder, "embed_text")]
+for ident in text_identifiers:
+    results = ident.search_text("blue fox with white markings", top_k=5)
+    for match in results:
+        print(f"  {match.character_name}: {match.confidence:.1%}")
 
-# Get statistics (aggregated across all datasets)
+# Get statistics (aggregated across all datasets in an identifier)
 stats = identifier.get_stats()
 print(f"Database contains {stats['unique_characters']} characters")
 
@@ -410,7 +424,7 @@ pursuit/
 ├── sam3_pursuit/           # Main package
 │   ├── api/
 │   │   ├── cli.py          # Command-line interface
-│   │   ├── identifier.py   # FursuitIdentifier (read-only, multi-dataset search)
+│   │   ├── identifier.py   # FursuitIdentifier (read-only, multi-dataset search), create_identifiers (multi-embedder factory)
 │   │   └── ingestor.py     # FursuitIngestor (ingestion, single dataset)
 │   ├── models/
 │   │   ├── segmentor.py    # SAM3 segmentation (SAM3FursuitSegmentor, FullImageSegmentor)

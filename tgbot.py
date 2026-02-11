@@ -25,7 +25,7 @@ import webserver
 
 load_dotenv()
 
-from sam3_pursuit import FursuitIdentifier, FursuitIngestor, Config
+from sam3_pursuit import FursuitIdentifier, FursuitIngestor, Config, create_identifiers
 from sam3_pursuit.api.annotator import annotate_image
 from telegram import InputMediaPhoto
 
@@ -35,20 +35,19 @@ from sam3_pursuit.storage.database import SOURCE_TGBOT, get_git_version, get_sou
 CHARACTER_PATTERN = re.compile(r"character:(\S+)", re.IGNORECASE)
 
 # Global instances (lazy loaded)
-_identifier = None
+_identifiers = None
 _ingestor = None
 
 
-def get_identifier() -> FursuitIdentifier:
-    """Get or create the identifier instance (read-only search)."""
-    global _identifier
-    if _identifier is None:
-        _identifier = FursuitIdentifier(
-            datasets=[(Config.DB_PATH, Config.INDEX_PATH)],
+def get_identifiers() -> list[FursuitIdentifier]:
+    """Get or create identifier instances (one per embedder group)."""
+    global _identifiers
+    if _identifiers is None:
+        _identifiers = create_identifiers(
             segmentor_model_name=Config.SAM3_MODEL,
             segmentor_concept=Config.DEFAULT_CONCEPT,
         )
-    return _identifier
+    return _identifiers
 
 
 def get_ingestor() -> FursuitIngestor:
@@ -152,7 +151,18 @@ async def identify_and_send(context: ContextTypes.DEFAULT_TYPE, chat_id: int,
     new_file = await photo_attachment[-1].get_file()
     temp_path = await download_tg_file(new_file)
     image = Image.open(temp_path)
-    results = get_identifier().identify(image, top_k=5)
+
+    identifiers = get_identifiers()
+    # Run identify on all identifiers; segmentation masks are cached after the first.
+    all_results = [ident.identify(image, top_k=5) for ident in identifiers]
+
+    # Merge results: combine matches per segment across identifiers
+    results = all_results[0] if all_results else []
+    for other in all_results[1:]:
+        for seg, other_seg in zip(results, other):
+            seg.matches.extend(other_seg.matches)
+            seg.matches.sort(key=lambda x: x.confidence, reverse=True)
+            seg.matches = seg.matches[:5]
 
     reply_kwargs = {"chat_id": chat_id}
     if reply_to_message_id:
@@ -291,9 +301,14 @@ async def show(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
     query = " ".join(context.args)
     try:
-        identifier = get_identifier()
-        db = identifier.stores[0][0]
-        all_names = db.get_all_character_names()
+        identifiers = get_identifiers()
+        # Collect character names from all databases across all identifiers
+        all_names = set()
+        all_dbs = []
+        for ident in identifiers:
+            for db, _ in ident.stores:
+                all_dbs.append(db)
+                all_names.update(db.get_all_character_names())
 
         # Try exact match first (case-insensitive)
         name_lower = {n.lower(): n for n in all_names}
@@ -314,10 +329,11 @@ async def show(update: Update, context: ContextTypes.DEFAULT_TYPE):
             )
             return
 
-        # Gather detections from all matched names
+        # Gather detections from all matched names across all databases
         detections = []
         for name in matched_names:
-            detections.extend(db.get_detections_by_character(name))
+            for db in all_dbs:
+                detections.extend(db.get_detections_by_character(name))
 
         if len(matched_names) > 1:
             names_list = ", ".join(matched_names)
@@ -380,10 +396,25 @@ async def search(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
     query = " ".join(context.args)
     try:
-        identifier = get_identifier()
-        results = identifier.search_text(query, top_k=10)
+        identifiers = get_identifiers()
+        # Only search identifiers whose embedder supports text
+        text_identifiers = [
+            ident for ident in identifiers
+            if hasattr(ident.pipeline.embedder, "embed_text")
+        ]
+        if not text_identifiers:
+            await context.bot.send_message(
+                chat_id=update.effective_chat.id,
+                text="Text search is not available. No datasets use a text-capable embedder (CLIP/SigLIP)."
+            )
+            return
 
-        if not results:
+        # Merge text search results from all text-capable identifiers
+        all_results = []
+        for ident in text_identifiers:
+            all_results.extend(ident.search_text(query, top_k=10))
+
+        if not all_results:
             await context.bot.send_message(
                 chat_id=update.effective_chat.id,
                 text=f"No matches found for '{query}'."
@@ -392,7 +423,7 @@ async def search(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
         # Deduplicate by character, keeping best match
         seen = {}
-        for r in results:
+        for r in all_results:
             name = r.character_name or "unknown"
             if name not in seen or r.confidence > seen[name].confidence:
                 seen[name] = r
@@ -407,10 +438,12 @@ async def search(update: Update, context: ContextTypes.DEFAULT_TYPE):
             else:
                 lines.append(f"  {i}. {name} ({m.confidence*100:.1f}%)")
 
-        # Send example images for the top match
+        # Send example images for the top match — search across all databases
         top_name = top_matches[0].character_name
-        db = identifier.stores[0][0]
-        detections = db.get_detections_by_character(top_name)
+        detections = []
+        for ident in identifiers:
+            for db, _ in ident.stores:
+                detections.extend(db.get_detections_by_character(top_name))
         seen_posts = set()
         media = []
         for det in detections:
@@ -439,13 +472,6 @@ async def search(update: Update, context: ContextTypes.DEFAULT_TYPE):
             for i in range(0, len(media), 10):
                 await context.bot.send_media_group(
                     chat_id=update.effective_chat.id, media=media[i:i+10])
-
-    except ValueError:
-        # search_text raises ValueError if embedder doesn't support text
-        await context.bot.send_message(
-            chat_id=update.effective_chat.id,
-            text="Text search is not available with the current embedder."
-        )
     except Exception as e:
         print(f"Error in search: {e}", file=sys.stderr)
         await context.bot.send_message(
@@ -457,18 +483,35 @@ async def search(update: Update, context: ContextTypes.DEFAULT_TYPE):
 async def stats(update: Update, context: ContextTypes.DEFAULT_TYPE):
     """Handle /stats command."""
     try:
-        ident = get_identifier()
-        stats = ident.get_stats()
+        identifiers = get_identifiers()
+        # Aggregate stats across all identifiers
+        total_detections = 0
+        all_characters = set()
+        all_posts = set()
+        total_index_size = 0
+        num_datasets = 0
+        for ident in identifiers:
+            s = ident.get_stats()
+            total_detections += s["total_detections"]
+            total_index_size += s["index_size"]
+            num_datasets += s.get("num_datasets", 1)
+            # Collect character names and post IDs from each db
+            for db, _ in ident.stores:
+                all_characters.update(db.get_all_character_names())
+                conn = db._connect()
+                cursor = conn.cursor()
+                cursor.execute("SELECT DISTINCT post_id FROM detections")
+                all_posts.update(row[0] for row in cursor.fetchall())
+        combined_stats = {
+            "total_detections": total_detections,
+            "unique_characters": len(all_characters),
+            "unique_posts": len(all_posts),
+            "index_size": total_index_size,
+            "num_datasets": num_datasets,
+            "num_embedder_groups": len(identifiers),
+        }
         import yaml
-        msg = yaml.safe_dump(stats)
-
-        # msg = (
-        #     f"Database Statistics:\n"
-        #     f"- Total detections: {stats['total_detections']}\n"
-        #     f"- Unique characters: {stats['unique_characters']}\n"
-        #     f"- Unique posts: {stats['unique_posts']}\n"
-        #     f"- Index size: {stats['index_size']}"
-        # )
+        msg = yaml.safe_dump(combined_stats)
         await context.bot.send_message(chat_id=update.effective_chat.id, text=msg)
 
     except Exception as e:

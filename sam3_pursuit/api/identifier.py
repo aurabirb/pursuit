@@ -1,4 +1,4 @@
-import os
+import hashlib
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Optional
@@ -8,7 +8,7 @@ from PIL import Image
 
 from sam3_pursuit.config import Config, sanitize_path_component
 from sam3_pursuit.models.preprocessor import IsolationConfig
-from sam3_pursuit.pipeline.processor import CachedProcessingPipeline
+from sam3_pursuit.pipeline.processor import CachedProcessingPipeline, CacheKey
 from sam3_pursuit.storage.database import Database
 from sam3_pursuit.storage.vector_index import VectorIndex
 
@@ -69,7 +69,7 @@ class FursuitIdentifier:
 
     def __init__(
         self,
-        datasets: Optional[list[tuple[str, str]]] = None,
+        datasets: list[tuple[str, str]],
         device: Optional[str] = None,
         isolation_config: Optional[IsolationConfig] = None,
         segmentor_model_name: Optional[str] = "",
@@ -80,22 +80,12 @@ class FursuitIdentifier:
         """
         Args:
             datasets: list of (db_path, index_path) tuples to search across.
-                      If None, auto-discovers all *.db/*.index pairs in Config.BASE_DIR.
         """
-        if datasets is None:
-            datasets = discover_datasets()
-            if not datasets:
-                raise FileNotFoundError(
-                    f"No datasets found in {Config.BASE_DIR}. "
-                    "Expected *.db and *.index file pairs."
-                )
-            names = [Path(db).stem for db, _ in datasets]
-            print(f"Auto-discovered {len(datasets)} dataset(s): {', '.join(names)}")
 
         self.stores: list[tuple[Database, VectorIndex]] = []
+        embedding_dim = embedder.embedding_dim if embedder else Config.EMBEDDING_DIM
         for db_path, index_path in datasets:
             db = Database(db_path)
-            embedding_dim = embedder.embedding_dim if embedder else Config.EMBEDDING_DIM
             index = VectorIndex(index_path, embedding_dim=embedding_dim)
             self.stores.append((db, index))
 
@@ -133,9 +123,15 @@ class FursuitIdentifier:
             print("Warning: All indexes are empty, no matches possible")
             return []
 
-        proc_results = self.pipeline.process(image)
+        # Generate cache key from image content so segmentation masks are
+        # reused when the same image is processed by multiple identifiers.
+        image_bytes = image.tobytes()
+        image_hash = hashlib.md5(image_bytes).hexdigest()
+        cache_key = CacheKey(post_id=image_hash, source="query")
+
+        proc_results = self.pipeline.process(image, cache_key=cache_key)
         if not proc_results:
-            proc_results = self.fallback_pipeline.process(image)
+            proc_results = self.fallback_pipeline.process(image, cache_key=cache_key)
 
         segment_results = []
         for i, proc_result in enumerate(proc_results):
@@ -226,3 +222,75 @@ class FursuitIdentifier:
             "index_size": total_index_size,
             "num_datasets": len(self.stores),
         }
+
+
+def build_embedder_for_name(short_name: str, device: Optional[str] = None):
+    """Instantiate an embedder from its short name (e.g. 'siglip', 'dv2b', 'clip')."""
+    from sam3_pursuit.pipeline.processor import SHORT_NAME_TO_CLI
+
+    cli_name = SHORT_NAME_TO_CLI.get(short_name, short_name)
+    if cli_name in ("siglip", "google/siglip-base-patch16-224"):
+        from sam3_pursuit.models.embedder import SigLIPEmbedder
+        return SigLIPEmbedder(device=device)
+    if cli_name == "clip":
+        from sam3_pursuit.models.embedder import CLIPEmbedder
+        return CLIPEmbedder(device=device)
+    if cli_name == "dinov2-base":
+        from sam3_pursuit.models.embedder import DINOv2Embedder
+        return DINOv2Embedder(model_name=Config.DINOV2_MODEL, device=device)
+    if cli_name == "dinov2-large":
+        from sam3_pursuit.models.embedder import DINOv2Embedder
+        return DINOv2Embedder(model_name=Config.DINOV2_LARGE_MODEL, device=device)
+    if cli_name == "dinov2-base+colorhist":
+        from sam3_pursuit.models.embedder import DINOv2Embedder, ColorHistogramEmbedder
+        return ColorHistogramEmbedder(DINOv2Embedder(device=device))
+    # Fallback: default SigLIP
+    from sam3_pursuit.models.embedder import SigLIPEmbedder
+    return SigLIPEmbedder(device=device)
+
+
+def create_identifiers(
+    datasets: Optional[list[tuple[str, str]]] = None,
+    base_dir: str = Config.BASE_DIR,
+    **kwargs,
+) -> list["FursuitIdentifier"]:
+    """Create one FursuitIdentifier per embedder group.
+
+    If datasets is None, auto-discovers all *.db/*.index pairs in base_dir.
+    Groups datasets by stored embedder metadata and creates a separate
+    identifier with the correct embedder for each group.
+
+    Additional kwargs are passed to FursuitIdentifier (device, isolation_config, etc.).
+    The 'embedder' kwarg is overridden per group.
+    """
+    from sam3_pursuit.pipeline.processor import DEFAULT_EMBEDDER_SHORT
+
+    if datasets is None:
+        datasets = discover_datasets(base_dir)
+        if not datasets:
+            raise FileNotFoundError(
+                f"No datasets found in {base_dir}. "
+                "Expected *.db and *.index file pairs."
+            )
+        names = [Path(db).stem for db, _ in datasets]
+        print(f"Auto-discovered {len(datasets)} dataset(s): {', '.join(names)}")
+
+    # Group datasets by embedder metadata
+    groups: dict[str, list[tuple[str, str]]] = {}
+    for db_path, index_path in datasets:
+        emb = Database.read_metadata_lightweight(db_path, Config.METADATA_KEY_EMBEDDER)
+        groups.setdefault(emb or DEFAULT_EMBEDDER_SHORT, []).append((db_path, index_path))
+
+    kwargs.pop("embedder", None)  # discard: we build per-group embedders
+    identifiers = []
+    for embedder_short, group_datasets in groups.items():
+        embedder = build_embedder_for_name(embedder_short, device=kwargs.get("device"))
+        names = [Path(db).stem for db, _ in group_datasets]
+        print(f"Identifier for {embedder_short}: {', '.join(names)}")
+        ident = FursuitIdentifier(
+            datasets=group_datasets,
+            embedder=embedder,
+            **kwargs,
+        )
+        identifiers.append(ident)
+    return identifiers

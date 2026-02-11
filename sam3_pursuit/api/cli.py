@@ -309,26 +309,16 @@ def _get_isolation_config(args):
 
 
 def _build_embedder(args):
-    """Build embedder from CLI args. Returns (embedder, None) or None for default."""
+    """Build embedder from CLI args. Returns embedder or None for default."""
+    from sam3_pursuit.api.identifier import build_embedder_for_name
+    from sam3_pursuit.pipeline.processor import CLI_TO_SHORT_NAME
+
     embedder_name = getattr(args, "embedder", Config.DEFAULT_EMBEDDER)
     if embedder_name == Config.DEFAULT_EMBEDDER:
         return None  # use pipeline default
-    if embedder_name == "dinov2-base":
-        from sam3_pursuit.models.embedder import DINOv2Embedder
-        return DINOv2Embedder(model_name=Config.DINOV2_MODEL)
-    if embedder_name == "dinov2-large":
-        from sam3_pursuit.models.embedder import DINOv2Embedder
-        return DINOv2Embedder(model_name=Config.DINOV2_LARGE_MODEL)
-    if embedder_name == "clip":
-        from sam3_pursuit.models.embedder import CLIPEmbedder
-        return CLIPEmbedder()
-    if embedder_name == "siglip":
-        from sam3_pursuit.models.embedder import SigLIPEmbedder
-        return SigLIPEmbedder()
-    if embedder_name == "dinov2-base+colorhist":
-        from sam3_pursuit.models.embedder import DINOv2Embedder, ColorHistogramEmbedder
-        return ColorHistogramEmbedder(DINOv2Embedder())
-    return None
+    short_name = CLI_TO_SHORT_NAME.get(embedder_name, embedder_name)
+    device = getattr(args, "device", None)
+    return build_embedder_for_name(short_name, device=device)
 
 
 def _build_preprocessors(args):

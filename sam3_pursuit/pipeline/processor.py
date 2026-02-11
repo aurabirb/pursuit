@@ -44,6 +44,12 @@ SHORT_NAME_TO_CLI = {
     "dv2b+chist": "dinov2-base+colorhist",
 }
 
+# Reverse lookup: CLI name -> short name
+CLI_TO_SHORT_NAME = {v: k for k, v in SHORT_NAME_TO_CLI.items()}
+
+# Short name for the default embedder
+DEFAULT_EMBEDDER_SHORT = CLI_TO_SHORT_NAME[Config.DEFAULT_EMBEDDER]
+
 
 class CachedProcessingPipeline:
     """Segment, isolate, and embed an image."""
@@ -78,9 +84,6 @@ class CachedProcessingPipeline:
 
 
     def get_embedder_short_name(self) -> str:
-        return self._short_embedder_name()
-
-    def _short_embedder_name(self) -> str:
         emb = self.embedder_model_name
         if "+colorhist" in emb:
             base = emb.replace("+colorhist", "")
@@ -119,7 +122,7 @@ class CachedProcessingPipeline:
         if self.preprocessors:
             pp_names = [getattr(pp, "short_name", getattr(pp, "__name__", type(pp).__name__)) for pp in self.preprocessors]
             parts += [f"pp:{'+'.join(pp_names)}"]
-        parts += [f"emb:{self._short_embedder_name()}", f"tsz:{Config.TARGET_IMAGE_SIZE}"]
+        parts += [f"emb:{self.get_embedder_short_name()}", f"tsz:{Config.TARGET_IMAGE_SIZE}"]
         return "|".join(parts)
 
 

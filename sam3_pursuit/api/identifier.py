@@ -61,19 +61,7 @@ class FursuitIngestor:
             preprocessors=preprocessors,
         )
         # Store/validate embedder metadata
-        current_embedder = self.pipeline.get_embedder_short_name()
-        stored_embedder = self.db.get_metadata("embedder")
-        if stored_embedder is not None:
-            if stored_embedder != current_embedder:
-                from sam3_pursuit.pipeline.processor import SHORT_NAME_TO_CLI
-                cli_name = SHORT_NAME_TO_CLI.get(stored_embedder, stored_embedder)
-                raise ValueError(
-                    f"Dataset was built with embedder '{stored_embedder}', "
-                    f"but current embedder is '{current_embedder}'. "
-                    f"Use --embedder {cli_name} to match."
-                )
-        else:
-            self.db.set_metadata("embedder", current_embedder)
+        self._validate_or_store_embedder()
 
         self.fallback_pipeline = CachedProcessingPipeline(
             device=device,
@@ -85,6 +73,29 @@ class FursuitIngestor:
             preprocessors=preprocessors,
         )
 
+
+    def _validate_or_store_embedder(self):
+        """Validate embedder matches dataset, or store it on first use."""
+        from sam3_pursuit.pipeline.processor import SHORT_NAME_TO_CLI
+        current = self.pipeline.get_embedder_short_name()
+        embedder_dim = self.pipeline.embedder.embedding_dim
+        stored = self.db.get_metadata(Config.METADATA_KEY_EMBEDDER)
+        if stored is not None:
+            if stored != current:
+                cli_name = SHORT_NAME_TO_CLI.get(stored, stored)
+                raise ValueError(
+                    f"Dataset was built with embedder '{stored}', "
+                    f"but current embedder is '{current}'. "
+                    f"Use --embedder {cli_name} to match."
+                )
+        elif self.index.size > 0 and self.index.embedding_dim != embedder_dim:
+            raise ValueError(
+                f"Index has {self.index.embedding_dim}D embeddings but current embedder "
+                f"'{current}' produces {embedder_dim}D. "
+                f"Use --embedder to select the matching embedder."
+            )
+        else:
+            self.db.set_metadata(Config.METADATA_KEY_EMBEDDER, current)
 
     def _sync_index_and_db(self):
         """Ensure FAISS index and database are in sync (crash recovery)."""

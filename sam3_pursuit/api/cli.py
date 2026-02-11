@@ -13,7 +13,7 @@ from sam3_pursuit.storage.database import (
     get_source_url,
 )
 
-from sam3_pursuit.pipeline.processor import SHORT_NAME_TO_CLI
+from sam3_pursuit.pipeline.processor import DEFAULT_EMBEDDER_SHORT, SHORT_NAME_TO_CLI
 
 
 def _get_dataset_paths(dataset: str) -> tuple[str, str]:
@@ -145,9 +145,9 @@ Examples:
     parser.add_argument("--blur-radius", type=int, default=Config.DEFAULT_BLUR_RADIUS,
                         help="Blur radius for blur mode (default: 25)")
     parser.add_argument("--embedder", "-emb",
-                        choices=["dinov2-base", "dinov2-large", "clip", "siglip", "dinov2-base+colorhist"],
-                        default="dinov2-base",
-                        help="Embedder model (default: dinov2-base)")
+                        choices=list(SHORT_NAME_TO_CLI.values()),
+                        default=Config.DEFAULT_EMBEDDER,
+                        help=f"Embedder model (default: {Config.DEFAULT_EMBEDDER})")
     parser.add_argument("--grayscale", "-gray", action="store_true",
                         help="Apply grayscale preprocessing before embedding")
 
@@ -311,8 +311,8 @@ def _get_isolation_config(args):
 
 def _build_embedder(args):
     """Build embedder from CLI args. Returns (embedder, None) or None for default."""
-    embedder_name = getattr(args, "embedder", "dinov2-base")
-    if embedder_name == "dinov2-base":
+    embedder_name = getattr(args, "embedder", Config.DEFAULT_EMBEDDER)
+    if embedder_name == Config.DEFAULT_EMBEDDER:
         return None  # use pipeline default
     if embedder_name == "dinov2-large":
         from sam3_pursuit.models.embedder import FursuitEmbedder
@@ -339,25 +339,34 @@ def _build_preprocessors(args):
 
 
 def _auto_detect_embedder(args):
-    """If user didn't explicitly pass --embedder, check DB metadata for stored embedder."""
-    embedder_name = getattr(args, "embedder", "dinov2-base")
-    if embedder_name != "dinov2-base":
+    """If user didn't explicitly pass --embedder, check DB metadata for stored embedder.
+
+    Uses lightweight sqlite3 to avoid double Database() init.
+    """
+    embedder_name = getattr(args, "embedder", Config.DEFAULT_EMBEDDER)
+    if embedder_name != Config.DEFAULT_EMBEDDER:
         return  # User explicitly chose an embedder
 
     db_path = getattr(args, "db", None)
     if not db_path or not os.path.exists(db_path):
         return
 
+    # Read metadata directly with sqlite3 to avoid double Database() init
     try:
-        from sam3_pursuit.storage.database import Database
-        db = Database(db_path)
-        stored = db.get_metadata("embedder")
-        db.close()
-        if stored and stored != "dv2b":
-            cli_name = SHORT_NAME_TO_CLI.get(stored)
-            if cli_name:
-                print(f"Auto-detected embedder from dataset: {cli_name} ({stored})")
-                args.embedder = cli_name
+        import sqlite3
+        conn = sqlite3.connect(db_path, timeout=5)
+        cursor = conn.execute(
+            "SELECT name FROM sqlite_master WHERE type='table' AND name='metadata'")
+        if cursor.fetchone():
+            cursor = conn.execute("SELECT value FROM metadata WHERE key = ?",
+                                  (Config.METADATA_KEY_EMBEDDER,))
+            row = cursor.fetchone()
+            if row and row[0] != DEFAULT_EMBEDDER_SHORT:
+                cli_name = SHORT_NAME_TO_CLI.get(row[0])
+                if cli_name:
+                    print(f"Auto-detected embedder from dataset: {cli_name} ({row[0]})")
+                    args.embedder = cli_name
+        conn.close()
     except Exception:
         pass
 
@@ -975,8 +984,8 @@ def evaluate_command(args):
         sys.exit(1)
 
     if from_index.embedding_dim != against_index.embedding_dim:
-        from_emb = from_db.get_metadata("embedder") or "unknown"
-        against_emb = against_db.get_metadata("embedder") or "unknown"
+        from_emb = from_db.get_metadata(Config.METADATA_KEY_EMBEDDER) or "unknown"
+        against_emb = against_db.get_metadata(Config.METADATA_KEY_EMBEDDER) or "unknown"
         print(f"Error: Embedding dimension mismatch: '{args.from_dataset}' is {from_index.embedding_dim}D ({from_emb}), "
               f"'{args.against}' is {against_index.embedding_dim}D ({against_emb}). "
               f"Datasets must use the same embedder.")
@@ -1140,8 +1149,8 @@ def _create_target_dataset(dataset_name: str, embedding_dim: int, embedder_name:
     db_path, index_path = _get_dataset_paths(dataset_name)
     db = Database(db_path)
     index = VectorIndex(index_path, embedding_dim=embedding_dim)
-    if embedder_name and db.get_metadata("embedder") is None:
-        db.set_metadata("embedder", embedder_name)
+    if embedder_name and db.get_metadata(Config.METADATA_KEY_EMBEDDER) is None:
+        db.set_metadata(Config.METADATA_KEY_EMBEDDER, embedder_name)
     return db, index
 
 
@@ -1264,7 +1273,7 @@ def combine_command(args):
             print(f"Error: Cannot combine datasets with different embedding dimensions: {detail}")
             sys.exit(1)
 
-        source_embedders = {ds: db.get_metadata("embedder") for ds, (db, _) in sources.items()}
+        source_embedders = {ds: db.get_metadata(Config.METADATA_KEY_EMBEDDER) for ds, (db, _) in sources.items()}
         unique_embedders = set(e for e in source_embedders.values() if e is not None)
         if len(unique_embedders) > 1:
             detail = ", ".join(f"'{k}': {v}" for k, v in source_embedders.items() if v is not None)
@@ -1325,7 +1334,7 @@ def split_command(args):
     # Copy DB records + embeddings if DB exists
     if has_db:
         source_db, source_index = _open_dataset(args.source_dataset)
-        source_embedder = source_db.get_metadata("embedder")
+        source_embedder = source_db.get_metadata(Config.METADATA_KEY_EMBEDDER)
 
         # Build filter query
         conditions = []

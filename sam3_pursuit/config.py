@@ -25,7 +25,11 @@ class Config:
     MASKS_INGEST_DIR = os.path.join(BASE_DIR, DEFAULT_MASKS_DIR, "ingest")
     MASKS_SEARCH_DIR = os.path.join(BASE_DIR, DEFAULT_MASKS_DIR, "search")
 
+    # Metadata keys (for database metadata table)
+    METADATA_KEY_EMBEDDER = "embedder"
+
     # Models
+    DEFAULT_EMBEDDER = "dinov2-base"  # CLI --embedder default
     SAM3_VRAM_REQUIRED_GB = 4  # SAM3 needs ~4GB VRAM
     SAM3_MODEL = "sam3"
     DINOV2_MODEL = "facebook/dinov2-base"

@@ -8,7 +8,7 @@
 # Prerequisites:
 #   - pursuit installed: uv pip install -e .
 #   - SAM3 model (sam3.pt) in project root
-#   - furtrack_images/ directory with images for the 9 characters
+#   - datasets/pursuit/furtrack/ directory with images for the 9 characters
 #
 # Usage:
 #   chmod +x run_conftest.sh
@@ -22,11 +22,11 @@ CHARACTERS="lindley,squiggles_(folf),wulf_(sharkitty),blueberry_the_wolf,nori_(g
 echo "=== Creating conftest_images/ with target characters ==="
 mkdir -p conftest_images
 for char in lindley "squiggles_(folf)" "wulf_(sharkitty)" blueberry_the_wolf "nori_(gatordog)" "smores_(dutch_angel_dragon)" ozzle selichat chidsh; do
-    if [ ! -d "furtrack_images/$char" ]; then
-        echo "ERROR: furtrack_images/$char not found!"
+    if [ ! -d "datasets/pursuit/furtrack/$char" ]; then
+        echo "ERROR: datasets/pursuit/furtrack/$char not found!"
         exit 1
     fi
-    ln -sfn "$(pwd)/furtrack_images/$char" "conftest_images/$char"
+    ln -sfn "$(pwd)/datasets/pursuit/furtrack/$char" "conftest_images/$char"
 done
 echo "Created conftest_images/ with $(ls conftest_images | wc -l) characters"
 

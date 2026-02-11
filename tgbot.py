@@ -1,6 +1,7 @@
 """Telegram bot for fursuit character identification using SAM3 system."""
 
 import asyncio
+import html
 import os
 import re
 import sys
@@ -128,7 +129,7 @@ async def add_photo(update: Update, context: ContextTypes.DEFAULT_TYPE, characte
         print(f"Error adding image: {e}", file=sys.stderr)
         await context.bot.send_message(
             chat_id=update.effective_chat.id,
-            text=f"Error adding image: {e}"
+            text="Error adding image. Please try again."
         )
 
 
@@ -157,7 +158,7 @@ async def identify_and_send(context: ContextTypes.DEFAULT_TYPE, chat_id: int,
         lines.append(f"Segment {i}:")
         for n, m in enumerate(filtered):
             url = get_source_url(m.source, m.post_id)
-            name = m.character_name or 'Unknown'
+            name = html.escape(m.character_name or 'Unknown')
             if url:
                 lines.append(f"  {n+1}. <a href=\"{url}\">{name}</a> ({m.confidence*100:.1f}%)")
             else:
@@ -188,8 +189,8 @@ async def identify_photo(update: Update, context: ContextTypes.DEFAULT_TYPE):
     try:
         await identify_and_send(context, update.effective_chat.id, update.message.effective_attachment)
     except Exception as e:
-        print(f"Error: {e}", file=sys.stderr)
-        await context.bot.send_message(chat_id=update.effective_chat.id, text=f"Error: {e}")
+        print(f"Error identifying photo: {e}", file=sys.stderr)
+        await context.bot.send_message(chat_id=update.effective_chat.id, text="Error identifying photo. Please try again.")
 
 
 async def whodis(update: Update, context: ContextTypes.DEFAULT_TYPE):
@@ -215,7 +216,7 @@ async def whodis(update: Update, context: ContextTypes.DEFAULT_TYPE):
         print(f"Error in whodis: {e}", file=sys.stderr)
         await context.bot.send_message(
             chat_id=update.effective_chat.id,
-            text=f"Error: {e}"
+            text="Error identifying photo. Please try again."
         )
 
 
@@ -248,9 +249,9 @@ async def reply_to_photo(update: Update, context: ContextTypes.DEFAULT_TYPE):
     try:
         await identify_and_send(context, update.effective_chat.id, reply_to.photo, reply_to.message_id)
     except Exception as e:
-        print(f"Error: {e}", file=sys.stderr)
+        print(f"Error in reply_to_photo: {e}", file=sys.stderr)
         await context.bot.send_message(
-            chat_id=update.effective_chat.id, reply_to_message_id=reply_to.message_id, text=f"Error: {e}"
+            chat_id=update.effective_chat.id, reply_to_message_id=reply_to.message_id, text="Error identifying photo. Please try again."
         )
 
 
@@ -322,9 +323,11 @@ async def show(update: Update, context: ContextTypes.DEFAULT_TYPE):
                 continue
             seen_posts.add(det.post_id)
             page_url = get_source_url(det.source, det.post_id)
-            caption = f"{det.character_name} ({det.source})"
+            safe_name = html.escape(det.character_name or "Unknown")
+            safe_source = html.escape(det.source or "unknown")
+            caption = f"{safe_name} ({safe_source})"
             if page_url:
-                caption = f"<a href=\"{page_url}\">{det.character_name}</a> ({det.source})"
+                caption = f"<a href=\"{page_url}\">{safe_name}</a> ({safe_source})"
             media.append(InputMediaPhoto(media=url, caption=caption, parse_mode="HTML"))
             if len(media) >= Config.MAX_EXAMPLES:
                 break
@@ -348,7 +351,7 @@ async def show(update: Update, context: ContextTypes.DEFAULT_TYPE):
         print(f"Error in show: {e}", file=sys.stderr)
         await context.bot.send_message(
             chat_id=update.effective_chat.id,
-            text=f"Error: {e}"
+            text="Error looking up character. Please try again."
         )
 
 
@@ -381,9 +384,9 @@ async def search(update: Update, context: ContextTypes.DEFAULT_TYPE):
                 seen[name] = r
         top_matches = sorted(seen.values(), key=lambda x: x.confidence, reverse=True)[:5]
 
-        lines = [f"Search results for '<b>{query}</b>':"]
+        lines = [f"Search results for '<b>{html.escape(query)}</b>':"]
         for i, m in enumerate(top_matches, 1):
-            name = m.character_name or "Unknown"
+            name = html.escape(m.character_name or "Unknown")
             url = get_source_url(m.source, m.post_id)
             if url:
                 lines.append(f"  {i}. <a href=\"{url}\">{name}</a> ({m.confidence*100:.1f}%)")
@@ -403,9 +406,11 @@ async def search(update: Update, context: ContextTypes.DEFAULT_TYPE):
                 continue
             seen_posts.add(det.post_id)
             page_url = get_source_url(det.source, det.post_id)
-            caption = f"{det.character_name} ({det.source})"
+            safe_name = html.escape(det.character_name or "Unknown")
+            safe_source = html.escape(det.source or "unknown")
+            caption = f"{safe_name} ({safe_source})"
             if page_url:
-                caption = f"<a href=\"{page_url}\">{det.character_name}</a> ({det.source})"
+                caption = f"<a href=\"{page_url}\">{safe_name}</a> ({safe_source})"
             media.append(InputMediaPhoto(media=img_url, caption=caption, parse_mode="HTML"))
             if len(media) >= Config.MAX_EXAMPLES:
                 break
@@ -420,17 +425,17 @@ async def search(update: Update, context: ContextTypes.DEFAULT_TYPE):
                 await context.bot.send_media_group(
                     chat_id=update.effective_chat.id, media=media[i:i+10])
 
-    except ValueError as e:
+    except ValueError:
         # search_text raises ValueError if embedder doesn't support text
         await context.bot.send_message(
             chat_id=update.effective_chat.id,
-            text=f"Text search not available: {e}"
+            text="Text search is not available with the current embedder."
         )
     except Exception as e:
         print(f"Error in search: {e}", file=sys.stderr)
         await context.bot.send_message(
             chat_id=update.effective_chat.id,
-            text=f"Error: {e}"
+            text="Error performing search. Please try again."
         )
 
 
@@ -452,9 +457,10 @@ async def stats(update: Update, context: ContextTypes.DEFAULT_TYPE):
         await context.bot.send_message(chat_id=update.effective_chat.id, text=msg)
 
     except Exception as e:
+        print(f"Error getting stats: {e}", file=sys.stderr)
         await context.bot.send_message(
             chat_id=update.effective_chat.id,
-            text=f"Error getting stats: {e}"
+            text="Error getting stats. Please try again."
         )
 
 

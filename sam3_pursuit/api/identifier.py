@@ -8,7 +8,7 @@ import numpy as np
 import requests
 from PIL import Image
 
-from sam3_pursuit.config import Config
+from sam3_pursuit.config import Config, sanitize_path_component
 from sam3_pursuit.models.preprocessor import IsolationConfig
 from sam3_pursuit.pipeline.processor import CacheKey, CachedProcessingPipeline
 from sam3_pursuit.storage.database import Database, Detection
@@ -138,9 +138,9 @@ class FursuitIngestor:
         source: Optional[str] = None,
     ) -> None:
         """Save crop image for debugging (optional, use --save-crops)."""
-        crops_dir = Path(Config.CROPS_INGEST_DIR) / (source or "unknown")
+        crops_dir = Path(Config.CROPS_INGEST_DIR) / sanitize_path_component(source or "unknown")
         crops_dir.mkdir(parents=True, exist_ok=True)
-        crop_path = crops_dir / f"{name}.jpg"
+        crop_path = crops_dir / f"{sanitize_path_component(name)}.jpg"
         image.convert("RGB").save(crop_path, quality=90)
 
     def _search_embedding(self, embedding: np.ndarray, top_k: int) -> list[IdentificationResult]:

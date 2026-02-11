@@ -1391,7 +1391,11 @@ def _create_target_dataset(dataset_name: str, embedding_dim: int, embedder_name:
 
 
 def _fetch_detections(db, where_clause: str | None = None, params: list | None = None):
-    """Fetch detections from a database, optionally filtered."""
+    """Fetch detections from a database, optionally filtered.
+
+    Security: where_clause is interpolated into SQL. Callers must only use
+    '?' placeholders with values in params, never interpolated user data.
+    """
     conn = db._connect()
     cursor = conn.cursor()
     query = f"SELECT {db._SELECT_FIELDS} FROM detections"

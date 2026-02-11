@@ -4,6 +4,18 @@ import os
 import torch
 
 
+def sanitize_path_component(name: str) -> str:
+    """Make a string safe for use as a single path component.
+
+    Prevents path traversal by removing /, \\, null bytes, and .. sequences.
+    """
+    name = name.replace("/", "_").replace("\\", "_").replace("\0", "")
+    name = name.replace("..", "_")
+    name = name.strip(". ")
+    name = name[:200]
+    return name or "unknown"
+
+
 class Config:
     BASE_DIR = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 

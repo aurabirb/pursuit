@@ -19,7 +19,7 @@ import sqlite3
 import aiohttp
 import requests
 
-from sam3_pursuit.config import Config
+from sam3_pursuit.config import Config, sanitize_path_component
 
 # Configuration
 MAX_IMAGES_PER_CHAR = 2
@@ -165,8 +165,7 @@ def get_post_metadata(post_id: int) -> dict | None:
 
 def sanitize_folder_name(name: str) -> str:
     """Sanitize character name for use as folder name."""
-    # Replace problematic characters
-    return name.replace("/", "_").replace("\\", "_").replace(":", "_").replace("\0", "").replace("|", "_")
+    return sanitize_path_component(name)
 
 
 def get_existing_images(char_folder: Path) -> set[str]:

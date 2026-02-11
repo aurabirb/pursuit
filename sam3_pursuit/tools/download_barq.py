@@ -19,7 +19,7 @@ from pathlib import Path
 import aiohttp
 from dotenv import load_dotenv
 
-from sam3_pursuit.config import Config
+from sam3_pursuit.config import Config, sanitize_path_component
 
 load_dotenv()
 
@@ -561,7 +561,7 @@ def get_folder_name(profile: dict) -> str:
             name = profile.get("uuid", "unknown")
 
     # Sanitize
-    name = name.replace("/", "_").replace("\\", "_").replace(":", "_").replace("\0", "").replace("|", "_")
+    name = sanitize_path_component(name)
     return f"{pid}.{name}"
 
 

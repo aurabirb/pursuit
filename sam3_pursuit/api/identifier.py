@@ -72,7 +72,7 @@ class FursuitIngestor:
                     f"but current embedder is '{current_embedder}'. "
                     f"Use --embedder {cli_name} to match."
                 )
-        elif self.index.size == 0:
+        else:
             self.db.set_metadata("embedder", current_embedder)
 
         self.fallback_pipeline = CachedProcessingPipeline(
@@ -302,10 +302,6 @@ class FursuitIngestor:
                 flush_batch()
 
         flush_batch()
-
-        # Store embedder metadata if not yet stored (backward compat for pre-metadata datasets)
-        if added_count > 0 and self.db.get_metadata("embedder") is None:
-            self.db.set_metadata("embedder", self.pipeline.get_embedder_short_name())
 
         skip_msg = f", {skipped_count} skipped (not fursuit)" if skipped_count else ""
         mask_msg = f", masks: {masks_reused_count} reused/{masks_generated_count} generated" if masks_reused_count or masks_generated_count else ""

@@ -218,8 +218,9 @@ Examples:
     _add_classify_args(barq_parser, default=True)
 
     combine_parser = subparsers.add_parser("combine", help="Combine multiple datasets into one")
-    combine_parser.add_argument("datasets", nargs="+", help="Source dataset names")
+    combine_parser.add_argument("datasets", nargs="+", help="Source dataset names (with --shards, each name is expanded to name_0, name_1, ...)")
     combine_parser.add_argument("--output", "-o", required=True, help="Target dataset name")
+    combine_parser.add_argument("--shards", type=int, nargs="?", const=0, default=None, help="Expand inputs as shards (auto-discover count, or specify N)")
 
     split_parser = subparsers.add_parser("split", help="Split a dataset by criteria")
     split_parser.add_argument("source_dataset", help="Source dataset name")
@@ -1485,12 +1486,32 @@ def _copy_detections(detections, source_index, target_db, target_index, batch_si
 
 def combine_command(args):
     """Combine multiple datasets into one."""
+    # Expand shard inputs if --shards is used
+    if args.shards is not None:
+        datasets = []
+        for name in args.datasets:
+            if args.shards == 0:
+                discovered = _discover_shards(name)
+                if not discovered:
+                    print(f"Warning: No shards found for '{name}'")
+                else:
+                    print(f"Discovered {len(discovered)} shards for '{name}'")
+                    datasets.extend(discovered)
+            else:
+                datasets.extend(f"{name}_{i}" for i in range(args.shards))
+    else:
+        datasets = args.datasets
+
+    if not datasets:
+        print("Error: No datasets to combine")
+        sys.exit(1)
+
     # Check output doesn't collide with sources
-    if args.output in args.datasets:
+    if args.output in datasets:
         print(f"Error: Output dataset '{args.output}' cannot be one of the source datasets")
         sys.exit(1)
 
-    datasets_with_db = [ds for ds in args.datasets if _dataset_has_db(ds)]
+    datasets_with_db = [ds for ds in datasets if _dataset_has_db(ds)]
 
     # Copy DB records + embeddings for datasets that have them
     total_copied = 0
@@ -1538,7 +1559,7 @@ def combine_command(args):
 
     # Copy image files
     total_files = 0
-    for ds_name in args.datasets:
+    for ds_name in datasets:
         files_copied = _copy_dataset_files(ds_name, args.output)
         if files_copied:
             print(f"Copied {files_copied} files from '{ds_name}'")

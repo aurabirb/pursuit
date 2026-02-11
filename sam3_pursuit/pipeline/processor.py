@@ -34,6 +34,17 @@ class ProcessingResult:
     preprocessing_info: str = ""
 
 
+# Mapping from pipeline short embedder names to CLI --embedder values
+SHORT_NAME_TO_CLI = {
+    "dv2b": "dinov2-base",
+    "dv2l": "dinov2-large",
+    "dv2g": "dinov2-giant",
+    "clip": "clip",
+    "siglip": "siglip",
+    "dv2b+chist": "dinov2-base+colorhist",
+}
+
+
 class CachedProcessingPipeline:
     """Segment, isolate, and embed an image."""
 
@@ -65,6 +76,9 @@ class CachedProcessingPipeline:
         self.isolator = BackgroundIsolator(isolation_config)
         self.isolation_config = self.isolator.config
 
+
+    def get_embedder_short_name(self) -> str:
+        return self._short_embedder_name()
 
     def _short_embedder_name(self) -> str:
         emb = self.embedder_model_name

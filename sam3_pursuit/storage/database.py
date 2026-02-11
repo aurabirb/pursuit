@@ -160,6 +160,29 @@ class Database:
         c.execute("CREATE INDEX IF NOT EXISTS idx_post_preproc ON detections(post_id, preprocessing_info)")
         c.execute("CREATE INDEX IF NOT EXISTS idx_source ON detections(source)")
         c.execute("CREATE INDEX IF NOT EXISTS idx_source_post_preproc ON detections(source, post_id, preprocessing_info)")
+
+        # Metadata table (key-value store for dataset-level config)
+        c.execute("""
+            CREATE TABLE IF NOT EXISTS metadata (
+                key TEXT PRIMARY KEY,
+                value TEXT NOT NULL
+            )
+        """)
+        conn.commit()
+
+    @retry_on_locked()
+    def get_metadata(self, key: str) -> Optional[str]:
+        conn = self._connect()
+        c = conn.cursor()
+        c.execute("SELECT value FROM metadata WHERE key = ?", (key,))
+        row = c.fetchone()
+        return row[0] if row else None
+
+    @retry_on_locked()
+    def set_metadata(self, key: str, value: str):
+        conn = self._connect()
+        c = conn.cursor()
+        c.execute("INSERT OR REPLACE INTO metadata (key, value) VALUES (?, ?)", (key, value))
         conn.commit()
 
     _INSERT_SQL = """

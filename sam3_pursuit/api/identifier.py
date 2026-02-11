@@ -60,6 +60,21 @@ class FursuitIngestor:
             embedder=embedder,
             preprocessors=preprocessors,
         )
+        # Store/validate embedder metadata
+        current_embedder = self.pipeline.get_embedder_short_name()
+        stored_embedder = self.db.get_metadata("embedder")
+        if stored_embedder is not None:
+            if stored_embedder != current_embedder:
+                from sam3_pursuit.pipeline.processor import SHORT_NAME_TO_CLI
+                cli_name = SHORT_NAME_TO_CLI.get(stored_embedder, stored_embedder)
+                raise ValueError(
+                    f"Dataset was built with embedder '{stored_embedder}', "
+                    f"but current embedder is '{current_embedder}'. "
+                    f"Use --embedder {cli_name} to match."
+                )
+        elif self.index.size == 0:
+            self.db.set_metadata("embedder", current_embedder)
+
         self.fallback_pipeline = CachedProcessingPipeline(
             device=device,
             isolation_config=isolation_config,
@@ -287,6 +302,10 @@ class FursuitIngestor:
                 flush_batch()
 
         flush_batch()
+
+        # Store embedder metadata if not yet stored (backward compat for pre-metadata datasets)
+        if added_count > 0 and self.db.get_metadata("embedder") is None:
+            self.db.set_metadata("embedder", self.pipeline.get_embedder_short_name())
 
         skip_msg = f", {skipped_count} skipped (not fursuit)" if skipped_count else ""
         mask_msg = f", masks: {masks_reused_count} reused/{masks_generated_count} generated" if masks_reused_count or masks_generated_count else ""

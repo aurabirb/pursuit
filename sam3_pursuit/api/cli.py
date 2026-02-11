@@ -13,6 +13,8 @@ from sam3_pursuit.storage.database import (
     get_source_url,
 )
 
+from sam3_pursuit.pipeline.processor import SHORT_NAME_TO_CLI
+
 
 def _get_dataset_paths(dataset: str) -> tuple[str, str]:
     """Get db and index paths for a dataset name."""
@@ -336,11 +338,36 @@ def _build_preprocessors(args):
     return preprocessors or None
 
 
+def _auto_detect_embedder(args):
+    """If user didn't explicitly pass --embedder, check DB metadata for stored embedder."""
+    embedder_name = getattr(args, "embedder", "dinov2-base")
+    if embedder_name != "dinov2-base":
+        return  # User explicitly chose an embedder
+
+    db_path = getattr(args, "db", None)
+    if not db_path or not os.path.exists(db_path):
+        return
+
+    try:
+        from sam3_pursuit.storage.database import Database
+        db = Database(db_path)
+        stored = db.get_metadata("embedder")
+        db.close()
+        if stored and stored != "dv2b":
+            cli_name = SHORT_NAME_TO_CLI.get(stored)
+            if cli_name:
+                print(f"Auto-detected embedder from dataset: {cli_name} ({stored})")
+                args.embedder = cli_name
+    except Exception:
+        pass
+
+
 def _get_ingestor(args):
     from sam3_pursuit.api.identifier import FursuitIngestor
     isolation_config = _get_isolation_config(args)
     segmentor_model_name = Config.SAM3_MODEL if getattr(args, "segment", True) else None
     segmentor_concept = args.concept if hasattr(args, "concept") and args.concept else Config.DEFAULT_CONCEPT
+    _auto_detect_embedder(args)
     embedder = _build_embedder(args)
     preprocessors = _build_preprocessors(args)
 
@@ -929,25 +956,15 @@ def download_command(args):
 def evaluate_command(args):
     """Evaluate one dataset against another."""
     import numpy as np
-    from sam3_pursuit.storage.database import Database
-    from sam3_pursuit.storage.vector_index import VectorIndex
 
-    from_db_path, from_index_path = _get_dataset_paths(args.from_dataset)
-    against_db_path, against_index_path = _get_dataset_paths(args.against)
+    for ds_name in (args.from_dataset, args.against):
+        if not _dataset_has_db(ds_name):
+            db_path, _ = _get_dataset_paths(ds_name)
+            print(f"Error: Dataset '{ds_name}' not found at {db_path}")
+            sys.exit(1)
 
-    # Load "from" dataset (validation/test set)
-    if not os.path.exists(from_db_path):
-        print(f"Error: Dataset '{args.from_dataset}' not found at {from_db_path}")
-        sys.exit(1)
-    from_db = Database(from_db_path)
-    from_index = VectorIndex(from_index_path)
-
-    # Load "against" dataset (training/reference set)
-    if not os.path.exists(against_db_path):
-        print(f"Error: Dataset '{args.against}' not found at {against_db_path}")
-        sys.exit(1)
-    against_db = Database(against_db_path)
-    against_index = VectorIndex(against_index_path)
+    from_db, from_index = _open_dataset(args.from_dataset)
+    against_db, against_index = _open_dataset(args.against)
 
     if from_index.size == 0:
         print(f"Error: Dataset '{args.from_dataset}' is empty.")
@@ -955,6 +972,14 @@ def evaluate_command(args):
 
     if against_index.size == 0:
         print(f"Error: Dataset '{args.against}' is empty.")
+        sys.exit(1)
+
+    if from_index.embedding_dim != against_index.embedding_dim:
+        from_emb = from_db.get_metadata("embedder") or "unknown"
+        against_emb = against_db.get_metadata("embedder") or "unknown"
+        print(f"Error: Embedding dimension mismatch: '{args.from_dataset}' is {from_index.embedding_dim}D ({from_emb}), "
+              f"'{args.against}' is {against_index.embedding_dim}D ({against_emb}). "
+              f"Datasets must use the same embedder.")
         sys.exit(1)
 
     top_k = args.top_k
@@ -1100,6 +1125,26 @@ def _dataset_has_db(dataset: str) -> bool:
     return os.path.exists(db_path) and os.path.exists(index_path)
 
 
+def _open_dataset(dataset_name: str):
+    """Open a dataset's Database and VectorIndex."""
+    from sam3_pursuit.storage.database import Database
+    from sam3_pursuit.storage.vector_index import VectorIndex
+    db_path, index_path = _get_dataset_paths(dataset_name)
+    return Database(db_path), VectorIndex(index_path)
+
+
+def _create_target_dataset(dataset_name: str, embedding_dim: int, embedder_name: str | None = None):
+    """Create/open a target dataset with correct embedding dim and propagate embedder metadata."""
+    from sam3_pursuit.storage.database import Database
+    from sam3_pursuit.storage.vector_index import VectorIndex
+    db_path, index_path = _get_dataset_paths(dataset_name)
+    db = Database(db_path)
+    index = VectorIndex(index_path, embedding_dim=embedding_dim)
+    if embedder_name and db.get_metadata("embedder") is None:
+        db.set_metadata("embedder", embedder_name)
+    return db, index
+
+
 def _fetch_detections(db, where_clause: str | None = None, params: list | None = None):
     """Fetch detections from a database, optionally filtered."""
     conn = db._connect()
@@ -1196,15 +1241,10 @@ def _copy_detections(detections, source_index, target_db, target_index, batch_si
 
 def combine_command(args):
     """Combine multiple datasets into one."""
-    from sam3_pursuit.storage.database import Database
-    from sam3_pursuit.storage.vector_index import VectorIndex
-
     # Check output doesn't collide with sources
     if args.output in args.datasets:
         print(f"Error: Output dataset '{args.output}' cannot be one of the source datasets")
         sys.exit(1)
-
-    output_db_path, output_index_path = _get_dataset_paths(args.output)
 
     datasets_with_db = [ds for ds in args.datasets if _dataset_has_db(ds)]
 
@@ -1213,14 +1253,30 @@ def combine_command(args):
     total_skipped = 0
 
     if datasets_with_db:
-        target_db = Database(output_db_path)
-        target_index = VectorIndex(output_index_path)
+        # Open all sources once (used for both validation and copying)
+        sources = {ds: _open_dataset(ds) for ds in datasets_with_db}
 
-        for ds_name in datasets_with_db:
-            db_path, index_path = _get_dataset_paths(ds_name)
-            source_db = Database(db_path)
-            source_index = VectorIndex(index_path)
+        # Validate all source datasets use the same embedder
+        source_dims = {ds: idx.embedding_dim for ds, (_, idx) in sources.items()}
+        unique_dims = set(source_dims.values())
+        if len(unique_dims) > 1:
+            detail = ", ".join(f"'{k}': {v}D" for k, v in source_dims.items())
+            print(f"Error: Cannot combine datasets with different embedding dimensions: {detail}")
+            sys.exit(1)
 
+        source_embedders = {ds: db.get_metadata("embedder") for ds, (db, _) in sources.items()}
+        unique_embedders = set(e for e in source_embedders.values() if e is not None)
+        if len(unique_embedders) > 1:
+            detail = ", ".join(f"'{k}': {v}" for k, v in source_embedders.items() if v is not None)
+            print(f"Error: Cannot combine datasets with different embedders: {detail}")
+            sys.exit(1)
+
+        embedding_dim = next(iter(unique_dims))
+        source_embedder = next(iter(unique_embedders)) if unique_embedders else None
+
+        target_db, target_index = _create_target_dataset(args.output, embedding_dim, source_embedder)
+
+        for ds_name, (source_db, source_index) in sources.items():
             detections = _fetch_detections(source_db)
 
             print(f"Copying {len(detections)} detections from '{ds_name}'...")
@@ -1255,9 +1311,6 @@ def combine_command(args):
 
 def split_command(args):
     """Split a dataset by criteria."""
-    from sam3_pursuit.storage.database import Database
-    from sam3_pursuit.storage.vector_index import VectorIndex
-
     if not args.by_source and not args.by_character:
         print("Error: At least one filter required (--by-source or --by-character)")
         sys.exit(1)
@@ -1271,9 +1324,8 @@ def split_command(args):
 
     # Copy DB records + embeddings if DB exists
     if has_db:
-        source_db_path, source_index_path = _get_dataset_paths(args.source_dataset)
-        source_db = Database(source_db_path)
-        source_index = VectorIndex(source_index_path)
+        source_db, source_index = _open_dataset(args.source_dataset)
+        source_embedder = source_db.get_metadata("embedder")
 
         # Build filter query
         conditions = []
@@ -1305,9 +1357,8 @@ def split_command(args):
                 shard_detections = shard_map[shard_idx]
                 target_name = _shard_name(args.output, shard_idx, shards)
 
-                target_db_path, target_index_path = _get_dataset_paths(target_name)
-                target_db = Database(target_db_path)
-                target_index = VectorIndex(target_index_path)
+                target_db, target_index = _create_target_dataset(
+                    target_name, source_index.embedding_dim, source_embedder)
 
                 print(f"Writing {len(shard_detections)} detections to '{target_name}'...")
                 copied, skipped = _copy_detections(shard_detections, source_index, target_db, target_index)

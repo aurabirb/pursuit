@@ -81,7 +81,6 @@ class MaskStorage:
             if force_conf:
                 return []
             confs = []
-        print(f'Found {len(masks)} masks in {mask_dir}')
         for i, path in enumerate(masks):
             name = path.stem
             seg_idx = int(name.split("_seg_")[-1])

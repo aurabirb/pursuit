@@ -286,7 +286,7 @@ class TestIdentification(unittest.TestCase):
         cls.skip_reason = None
 
         # Load identifier once for all tests
-        from sam3_pursuit.api.identifier import FursuitIngestor
+        from sam3_pursuit.api.ingestor import FursuitIngestor
         cls.identifier = FursuitIngestor(segmentor_model_name=Config.SAM3_MODEL, segmentor_concept=Config.DEFAULT_CONCEPT)
 
     def setUp(self):
@@ -358,7 +358,7 @@ class TestIdentification(unittest.TestCase):
         """Test adding images then identifying - the core use case."""
         # Create a temporary database for this test
         with tempfile.TemporaryDirectory() as tmpdir:
-            from sam3_pursuit.api.identifier import FursuitIngestor
+            from sam3_pursuit.api.ingestor import FursuitIngestor
 
             db_path = os.path.join(tmpdir, "test.db")
             index_path = os.path.join(tmpdir, "test.index")
@@ -427,7 +427,7 @@ class TestBarqIngestion(unittest.TestCase):
             db_path = os.path.join(tmpdir, "test.db")
             index_path = os.path.join(tmpdir, "test.index")
 
-            from sam3_pursuit.api.identifier import FursuitIngestor
+            from sam3_pursuit.api.ingestor import FursuitIngestor
             identifier = FursuitIngestor(db_path=db_path, index_path=index_path)
 
             # Run barq ingestion manually (simulating CLI)
@@ -491,7 +491,7 @@ class TestBarqIngestion(unittest.TestCase):
             db_path = os.path.join(tmpdir, "test.db")
             index_path = os.path.join(tmpdir, "test.index")
 
-            from sam3_pursuit.api.identifier import FursuitIngestor
+            from sam3_pursuit.api.ingestor import FursuitIngestor
             from sam3_pursuit.storage.database import SOURCE_BARQ, Database
             from pathlib import Path
 
@@ -603,7 +603,7 @@ class TestMaskReuse(unittest.TestCase):
     @unittest.skipIf(not os.path.exists(os.path.join(os.path.dirname(os.path.abspath(__file__)), "blazi_wolf.1.jpg")), "Test image not found")
     def test_process_with_masks_matches_fresh_processing(self):
         """Test that processing with saved masks produces identical embeddings to fresh SAM3."""
-        from sam3_pursuit.api.identifier import FursuitIngestor
+        from sam3_pursuit.api.ingestor import FursuitIngestor
         from sam3_pursuit.pipeline.processor import CacheKey
         from sam3_pursuit.storage.mask_storage import MaskStorage
 

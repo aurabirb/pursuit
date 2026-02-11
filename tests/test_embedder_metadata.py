@@ -168,7 +168,7 @@ class TestEmbedderValidationIntegration:
     def test_ingestor_stores_metadata(self, db_and_index):
         """FursuitIngestor should store embedder metadata on init."""
         db_path, index_path = db_and_index
-        from sam3_pursuit.api.identifier import FursuitIngestor
+        from sam3_pursuit.api.ingestor import FursuitIngestor
 
         ingestor = FursuitIngestor(
             db_path=db_path,
@@ -187,7 +187,7 @@ class TestEmbedderValidationIntegration:
         db.set_metadata(Config.METADATA_KEY_EMBEDDER, "dv2b+chist")
         db.close()
 
-        from sam3_pursuit.api.identifier import FursuitIngestor
+        from sam3_pursuit.api.ingestor import FursuitIngestor
 
         with pytest.raises(ValueError, match="Dataset was built with embedder"):
             FursuitIngestor(
@@ -206,7 +206,7 @@ class TestEmbedderValidationIntegration:
         _add_dummy_embedding(db, index, embedding_dim=832)
         db.close()
 
-        from sam3_pursuit.api.identifier import FursuitIngestor
+        from sam3_pursuit.api.ingestor import FursuitIngestor
 
         with pytest.raises(ValueError, match="Index has 832D embeddings"):
             FursuitIngestor(
@@ -224,7 +224,7 @@ class TestEmbedderValidationIntegration:
         db.set_metadata(Config.METADATA_KEY_EMBEDDER, "siglip")
         db.close()
 
-        from sam3_pursuit.api.identifier import FursuitIngestor
+        from sam3_pursuit.api.ingestor import FursuitIngestor
 
         ingestor = FursuitIngestor(
             db_path=db_path,

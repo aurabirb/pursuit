@@ -25,7 +25,7 @@ import webserver
 
 load_dotenv()
 
-from sam3_pursuit import FursuitIngestor, Config
+from sam3_pursuit import FursuitIdentifier, FursuitIngestor, Config
 from sam3_pursuit.api.annotator import annotate_image
 from telegram import InputMediaPhoto
 
@@ -34,12 +34,25 @@ from sam3_pursuit.storage.database import SOURCE_TGBOT, get_git_version, get_sou
 # Pattern to match "character:Name" in caption
 CHARACTER_PATTERN = re.compile(r"character:(\S+)", re.IGNORECASE)
 
-# Global ingestor instance (lazy loaded)
+# Global instances (lazy loaded)
+_identifier = None
 _ingestor = None
 
 
+def get_identifier() -> FursuitIdentifier:
+    """Get or create the identifier instance (read-only search)."""
+    global _identifier
+    if _identifier is None:
+        _identifier = FursuitIdentifier(
+            datasets=[(Config.DB_PATH, Config.INDEX_PATH)],
+            segmentor_model_name=Config.SAM3_MODEL,
+            segmentor_concept=Config.DEFAULT_CONCEPT,
+        )
+    return _identifier
+
+
 def get_ingestor() -> FursuitIngestor:
-    """Get or create the ingestor instance."""
+    """Get or create the ingestor instance (writes to DB)."""
     global _ingestor
     if _ingestor is None:
         _ingestor = FursuitIngestor(segmentor_model_name=Config.SAM3_MODEL, segmentor_concept=Config.DEFAULT_CONCEPT)
@@ -139,7 +152,7 @@ async def identify_and_send(context: ContextTypes.DEFAULT_TYPE, chat_id: int,
     new_file = await photo_attachment[-1].get_file()
     temp_path = await download_tg_file(new_file)
     image = Image.open(temp_path)
-    results = get_ingestor().identify(image, top_k=5)
+    results = get_identifier().identify(image, top_k=5)
 
     reply_kwargs = {"chat_id": chat_id}
     if reply_to_message_id:
@@ -278,8 +291,9 @@ async def show(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
     query = " ".join(context.args)
     try:
-        ingestor = get_ingestor()
-        all_names = ingestor.db.get_all_character_names()
+        identifier = get_identifier()
+        db = identifier.stores[0][0]
+        all_names = db.get_all_character_names()
 
         # Try exact match first (case-insensitive)
         name_lower = {n.lower(): n for n in all_names}
@@ -303,7 +317,7 @@ async def show(update: Update, context: ContextTypes.DEFAULT_TYPE):
         # Gather detections from all matched names
         detections = []
         for name in matched_names:
-            detections.extend(ingestor.db.get_detections_by_character(name))
+            detections.extend(db.get_detections_by_character(name))
 
         if len(matched_names) > 1:
             names_list = ", ".join(matched_names)
@@ -366,8 +380,8 @@ async def search(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
     query = " ".join(context.args)
     try:
-        ingestor = get_ingestor()
-        results = ingestor.search_text(query, top_k=10)
+        identifier = get_identifier()
+        results = identifier.search_text(query, top_k=10)
 
         if not results:
             await context.bot.send_message(
@@ -395,7 +409,8 @@ async def search(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
         # Send example images for the top match
         top_name = top_matches[0].character_name
-        detections = ingestor.db.get_detections_by_character(top_name)
+        db = identifier.stores[0][0]
+        detections = db.get_detections_by_character(top_name)
         seen_posts = set()
         media = []
         for det in detections:
@@ -442,8 +457,8 @@ async def search(update: Update, context: ContextTypes.DEFAULT_TYPE):
 async def stats(update: Update, context: ContextTypes.DEFAULT_TYPE):
     """Handle /stats command."""
     try:
-        identifier = get_ingestor()
-        stats = identifier.get_stats()
+        ident = get_identifier()
+        stats = ident.get_stats()
         import yaml
         msg = yaml.safe_dump(stats)
 

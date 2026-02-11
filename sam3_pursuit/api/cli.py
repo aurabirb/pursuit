@@ -363,8 +363,8 @@ def _auto_detect_embedder(args):
             args.embedder = cli_name
 
 
-def _get_ingestor(args):
-    from sam3_pursuit.api.identifier import FursuitIngestor
+def _get_common_kwargs(args):
+    """Build common kwargs shared by identifier and ingestor factories."""
     isolation_config = _get_isolation_config(args)
     segmentor_model_name = Config.SAM3_MODEL if getattr(args, "segment", True) else None
     device = getattr(args, "device")
@@ -373,16 +373,30 @@ def _get_ingestor(args):
     print(f"Using embedder: {getattr(args, 'embedder', Config.DEFAULT_EMBEDDER)}")
     embedder = _build_embedder(args)
     preprocessors = _build_preprocessors(args)
-
-    return FursuitIngestor(
+    return dict(
         device=device,
-        db_path=args.db,
-        index_path=args.index,
         isolation_config=isolation_config,
         segmentor_model_name=segmentor_model_name,
         segmentor_concept=segmentor_concept,
         embedder=embedder,
-        preprocessors=preprocessors)
+        preprocessors=preprocessors,
+    )
+
+
+def _get_identifier(args):
+    from sam3_pursuit.api.identifier import FursuitIdentifier
+    kwargs = _get_common_kwargs(args)
+    datasets = [(args.db, args.index)]
+    return FursuitIdentifier(datasets=datasets, **kwargs)
+
+
+def _get_ingestor(args):
+    from sam3_pursuit.api.ingestor import FursuitIngestor
+    kwargs = _get_common_kwargs(args)
+    return FursuitIngestor(
+        db_path=args.db,
+        index_path=args.index,
+        **kwargs)
 
 
 def _get_excluded_post_ids(exclude_datasets: str) -> set[str]:
@@ -421,11 +435,11 @@ def identify_command(args):
         print(f"Error: Image not found: {image_path}")
         sys.exit(1)
 
-    ingestor = _get_ingestor(args)
+    identifier = _get_identifier(args)
     image = Image.open(image_path)
     save_crops = getattr(args, "save_crops", False)
     crop_prefix = image_path.stem
-    results = ingestor.identify(
+    results = identifier.identify(
         image,
         top_k=args.top_k,
         save_crops=save_crops,
@@ -1023,7 +1037,7 @@ def stats_command(args):
 
 def segment_command(args):
     from sam3_pursuit.pipeline.processor import CacheKey, CachedProcessingPipeline
-    from sam3_pursuit.api.identifier import FursuitIngestor
+    from sam3_pursuit.api.ingestor import FursuitIngestor
     from glob import glob
 
     concept = getattr(args, "concept", None) or Config.DEFAULT_CONCEPT

@@ -74,7 +74,7 @@ class TestIngestTiming(unittest.TestCase):
 
     def test_ingest_with_masks_timing(self):
         """Time full ingestion pipeline with pre-computed masks."""
-        from sam3_pursuit.api.identifier import FursuitIngestor
+        from sam3_pursuit.api.ingestor import FursuitIngestor
 
         # Point mask storage at our pre-computed masks
         mask_storage = MaskStorage(base_dir=self.mask_dir)
@@ -121,7 +121,7 @@ class TestIngestTiming(unittest.TestCase):
 
     def test_per_step_breakdown(self):
         """Time individual steps: mask load, isolation, embedding, db."""
-        from sam3_pursuit.api.identifier import FursuitIngestor
+        from sam3_pursuit.api.ingestor import FursuitIngestor
         from sam3_pursuit.models.segmentor import SegmentationResult
 
         mask_storage = MaskStorage(base_dir=self.mask_dir)

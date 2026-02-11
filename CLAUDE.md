@@ -250,11 +250,43 @@ python tgbot.py
 ## Python API
 
 ```python
-from sam3_pursuit import FursuitIngestor
+from sam3_pursuit import FursuitIdentifier, FursuitIngestor
 from sam3_pursuit.models.preprocessor import IsolationConfig
+from sam3_pursuit.config import Config
 from PIL import Image
 
-# Initialize with default settings (loads SAM3 + SigLIP)
+# --- Identification (read-only, supports multiple datasets) ---
+
+# Single dataset
+identifier = FursuitIdentifier(
+    datasets=[(Config.DB_PATH, Config.INDEX_PATH)],
+)
+
+# Multiple datasets (searches all, merges results)
+identifier = FursuitIdentifier(
+    datasets=[("pursuit.db", "pursuit.index"), ("validation.db", "validation.index")],
+)
+
+# Identify character in image
+image = Image.open("photo.jpg")
+results = identifier.identify(image, top_k=5)
+
+for segment in results:
+    print(f"Segment {segment.segment_index} at {segment.segment_bbox}:")
+    for match in segment.matches:
+        print(f"  {match.character_name}: {match.confidence:.1%}")
+
+# Search by text (CLIP/SigLIP embedder only)
+results = identifier.search_text("blue fox with white markings", top_k=5)
+for match in results:
+    print(f"  {match.character_name}: {match.confidence:.1%}")
+
+# Get statistics (aggregated across all datasets)
+stats = identifier.get_stats()
+print(f"Database contains {stats['unique_characters']} characters")
+
+# --- Ingestion (writes to a single dataset) ---
+
 ingestor = FursuitIngestor()
 
 # Or customize background isolation
@@ -265,26 +297,8 @@ isolation_config = IsolationConfig(
 )
 ingestor = FursuitIngestor(isolation_config=isolation_config)
 
-# Identify character in image
-image = Image.open("photo.jpg")
-results = ingestor.identify(image, top_k=5)
-
-for segment in results:
-    print(f"Segment {segment.segment_index} at {segment.segment_bbox}:")
-    for match in segment.matches:
-        print(f"  {match.character_name}: {match.confidence:.1%}")
-
 # Add images for characters
 ingestor.add_images(["MyCharacter", "Zygote"], ["img1.jpg", "img2.jpg"])
-
-# Search by text (CLIP/SigLIP embedder only)
-results = ingestor.search_text("blue fox with white markings", top_k=5)
-for match in results:
-    print(f"  {match.character_name}: {match.confidence:.1%}")
-
-# Get statistics
-stats = ingestor.get_stats()
-print(f"Database contains {stats['unique_characters']} characters")
 ```
 
 ### Using the segmentor directly
@@ -396,7 +410,8 @@ pursuit/
 ├── sam3_pursuit/           # Main package
 │   ├── api/
 │   │   ├── cli.py          # Command-line interface
-│   │   └── identifier.py   # Main API: FursuitIngestor
+│   │   ├── identifier.py   # FursuitIdentifier (read-only, multi-dataset search)
+│   │   └── ingestor.py     # FursuitIngestor (ingestion, single dataset)
 │   ├── models/
 │   │   ├── segmentor.py    # SAM3 segmentation (SAM3FursuitSegmentor, FullImageSegmentor)
 │   │   ├── embedder.py     # Embedders: SigLIP (default), DINOv2, CLIP (DINOv2Embedder, SigLIPEmbedder, CLIPEmbedder)

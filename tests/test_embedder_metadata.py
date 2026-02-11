@@ -176,7 +176,7 @@ class TestEmbedderValidationIntegration:
             segmentor_model_name="full",
         )
         stored = ingestor.db.get_metadata(Config.METADATA_KEY_EMBEDDER)
-        assert stored == "dv2b"
+        assert stored == "siglip"
 
     def test_ingestor_rejects_wrong_embedder(self, db_and_index):
         """FursuitIngestor should raise when embedder doesn't match stored metadata."""
@@ -221,7 +221,7 @@ class TestEmbedderValidationIntegration:
 
         # Pre-store matching metadata
         db = Database(db_path)
-        db.set_metadata(Config.METADATA_KEY_EMBEDDER, "dv2b")
+        db.set_metadata(Config.METADATA_KEY_EMBEDDER, "siglip")
         db.close()
 
         from sam3_pursuit.api.identifier import FursuitIngestor
@@ -231,7 +231,7 @@ class TestEmbedderValidationIntegration:
             index_path=index_path,
             segmentor_model_name="full",
         )
-        assert ingestor.db.get_metadata(Config.METADATA_KEY_EMBEDDER) == "dv2b"
+        assert ingestor.db.get_metadata(Config.METADATA_KEY_EMBEDDER) == "siglip"
 
 
 class TestShortNameMapping:

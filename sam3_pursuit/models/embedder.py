@@ -8,7 +8,7 @@ from transformers import AutoImageProcessor, AutoModel
 from sam3_pursuit.config import Config
 
 
-class FursuitEmbedder:
+class DINOv2Embedder:
     def __init__(self, device: Optional[str] = None, model_name: str = Config.DINOV2_MODEL):
         self.device = device or Config.get_device()
         self.model_name = model_name

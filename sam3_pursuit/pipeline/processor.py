@@ -7,7 +7,7 @@ import numpy as np
 from PIL import Image
 
 from sam3_pursuit.config import Config
-from sam3_pursuit.models.embedder import FursuitEmbedder
+from sam3_pursuit.models.embedder import SigLIPEmbedder
 from sam3_pursuit.models.preprocessor import BackgroundIsolator, IsolationConfig
 from sam3_pursuit.models.segmentor import (
     FullImageSegmentor,
@@ -76,8 +76,8 @@ class CachedProcessingPipeline:
             self.embedder = embedder
             self.embedder_model_name = embedder.model_name
         else:
-            self.embedder_model_name = Config.DINOV2_MODEL
-            self.embedder = FursuitEmbedder(device=self.device, model_name=self.embedder_model_name)
+            self.embedder_model_name = Config.SIGLIP_MODEL
+            self.embedder = SigLIPEmbedder(device=self.device, model_name=self.embedder_model_name)
         self.preprocessors = preprocessors or []
         self.isolator = BackgroundIsolator(isolation_config)
         self.isolation_config = self.isolator.config

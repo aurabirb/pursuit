@@ -1,16 +1,16 @@
 # Pursuit - Fursuit Character Recognition
 
-Fursuit character recognition system using SAM3 + DINOv2. Identifies fursuit characters from photos by matching against a database of known characters.
+Fursuit character recognition system using SAM3 + SigLIP. Identifies fursuit characters from photos by matching against a database of known characters.
 
 ## How It Works
 
 ```
-Image → SAM3 (detect "fursuiter head") → Background Isolation → DINOv2 (768D embedding) → FAISS (similarity search) → Results
+Image → SAM3 (detect "fursuiter head") → Background Isolation → SigLIP (embedding) → FAISS (similarity search) → Results
 ```
 
 1. **SAM3** segments all fursuiters in the image using the text prompt `"fursuiter head"`
 2. **Background Isolation** replaces the background with a solid color or blur to reduce noise
-3. **DINOv2** generates a 768-dimensional embedding for each isolated fursuiter crop
+3. **SigLIP** generates an embedding for each isolated fursuiter crop
 4. **FAISS** finds the most similar embeddings in the database
 5. Results are returned with character names and confidence scores
 
@@ -93,14 +93,14 @@ pursuit add -c "CharacterName" -s manual img1.jpg img2.jpg img3.jpg
 pursuit add -c "CharacterName" -s furtrack img1.jpg img2.jpg --save-crops
 ```
 
-### Search by text description (CLIP/SigLIP only)
+### Search by text description
 
 ```bash
-pursuit -ds my_clip_dataset search "blue fox with white markings"
-pursuit -ds my_clip_dataset search "red wolf" --top-k 10 --json
+pursuit search "blue fox with white markings"
+pursuit search "red wolf" --top-k 10 --json
 ```
 
-Note: Text search requires a dataset built with a CLIP or SigLIP embedder. DINOv2 datasets do not support text search.
+Note: Text search requires a dataset built with a CLIP or SigLIP embedder (SigLIP is the default). DINOv2 datasets do not support text search.
 
 ### Test segmentation on an image
 
@@ -254,7 +254,7 @@ from sam3_pursuit import FursuitIngestor
 from sam3_pursuit.models.preprocessor import IsolationConfig
 from PIL import Image
 
-# Initialize with default settings (loads SAM3 + DINOv2)
+# Initialize with default settings (loads SAM3 + SigLIP)
 ingestor = FursuitIngestor()
 
 # Or customize background isolation
@@ -399,7 +399,7 @@ pursuit/
 │   │   └── identifier.py   # Main API: FursuitIngestor
 │   ├── models/
 │   │   ├── segmentor.py    # SAM3 segmentation (SAM3FursuitSegmentor, FullImageSegmentor)
-│   │   ├── embedder.py     # DINOv2 embeddings (FursuitEmbedder)
+│   │   ├── embedder.py     # Embedders: SigLIP (default), DINOv2, CLIP (DINOv2Embedder, SigLIPEmbedder, CLIPEmbedder)
 │   │   └── preprocessor.py # Background isolation (BackgroundIsolator, IsolationConfig)
 │   ├── pipeline/
 │   │   └── processor.py    # Segmentation + isolation + embedding pipeline
@@ -451,8 +451,9 @@ DEFAULT_MASKS_DIR = f"{DEFAULT_DATASET}_masks"
 
 # Models
 SAM3_MODEL = "sam3"                    # Model name
-DINOV2_MODEL = "facebook/dinov2-base"  # Embedding model
-EMBEDDING_DIM = 768                    # DINOv2 output dimension
+DEFAULT_EMBEDDER = "siglip"            # Default embedder (SigLIP)
+SIGLIP_MODEL = "google/siglip-base-patch16-224"
+EMBEDDING_DIM = 768                    # Embedding output dimension
 
 # Detection
 DEFAULT_CONCEPT = "fursuiter head"     # SAM3 text prompt
@@ -465,8 +466,7 @@ DEFAULT_BACKGROUND_COLOR = (128, 128, 128)  # Gray background
 DEFAULT_BLUR_RADIUS = 25               # Blur radius for "blur" mode
 
 # Image processing
-PATCH_SIZE = 14                        # DINOv2 patch size
-TARGET_IMAGE_SIZE = 630                # Resize target (multiple of PATCH_SIZE)
+TARGET_IMAGE_SIZE = 630                # Resize target
 ```
 
 ## Environment Variables
@@ -536,7 +536,8 @@ ingestor = FursuitIngestor(device="cuda")  # or "cpu", "mps"
 - [SAM3 Paper](https://arxiv.org/abs/2511.16719) - Segment Anything with Concepts
 - [SAM3 on HuggingFace](https://huggingface.co/facebook/sam3)
 - [Ultralytics SAM3 Docs](https://docs.ultralytics.com/models/sam-3/)
-- [DINOv2](https://github.com/facebookresearch/dinov2) - Self-supervised vision
+- [SigLIP](https://huggingface.co/google/siglip-base-patch16-224) - Default embedder
+- [DINOv2](https://github.com/facebookresearch/dinov2) - Alternative embedder (no text search)
 
 ## License
 

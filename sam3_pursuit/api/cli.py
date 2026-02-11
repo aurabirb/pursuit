@@ -323,9 +323,12 @@ def _build_embedder(args):
     embedder_name = getattr(args, "embedder", Config.DEFAULT_EMBEDDER)
     if embedder_name == Config.DEFAULT_EMBEDDER:
         return None  # use pipeline default
+    if embedder_name == "dinov2-base":
+        from sam3_pursuit.models.embedder import DINOv2Embedder
+        return DINOv2Embedder(model_name=Config.DINOV2_MODEL)
     if embedder_name == "dinov2-large":
-        from sam3_pursuit.models.embedder import FursuitEmbedder
-        return FursuitEmbedder(model_name=Config.DINOV2_LARGE_MODEL)
+        from sam3_pursuit.models.embedder import DINOv2Embedder
+        return DINOv2Embedder(model_name=Config.DINOV2_LARGE_MODEL)
     if embedder_name == "clip":
         from sam3_pursuit.models.embedder import CLIPEmbedder
         return CLIPEmbedder()
@@ -333,8 +336,8 @@ def _build_embedder(args):
         from sam3_pursuit.models.embedder import SigLIPEmbedder
         return SigLIPEmbedder()
     if embedder_name == "dinov2-base+colorhist":
-        from sam3_pursuit.models.embedder import FursuitEmbedder, ColorHistogramEmbedder
-        return ColorHistogramEmbedder(FursuitEmbedder())
+        from sam3_pursuit.models.embedder import DINOv2Embedder, ColorHistogramEmbedder
+        return ColorHistogramEmbedder(DINOv2Embedder())
     return None
 
 

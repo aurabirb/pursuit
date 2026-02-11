@@ -167,6 +167,9 @@ Examples:
     ingest_parser.add_argument("--save-crops", action="store_true", help="Save crop images")
     ingest_parser.add_argument("--no-full", dest="add_full_image", action="store_false",
                                help="Don't add full image embedding (only segments)")
+    ingest_parser.add_argument("--shards", type=int, nargs="?", const=0, default=None,
+                               help="Ingest shards in parallel (from split --shards). "
+                                    "Omit value to auto-discover, or specify count.")
     _add_classify_args(ingest_parser)
 
     stats_parser = subparsers.add_parser("stats", help="Show system statistics")
@@ -649,8 +652,106 @@ def show_command(args):
             print()
 
 
+def _discover_shards(dataset: str) -> list[str]:
+    """Discover shard datasets matching {dataset}_N pattern."""
+    import re
+    pattern = re.compile(rf'^{re.escape(dataset)}_(\d+)$')
+
+    found = set()
+
+    # Check dataset directories
+    datasets_dir = Path(Config.BASE_DIR) / "datasets"
+    if datasets_dir.exists():
+        for d in sorted(datasets_dir.iterdir()):
+            if d.is_dir() and pattern.match(d.name):
+                found.add(d.name)
+
+    # Also check for .db files
+    base_dir = os.path.dirname(Config.DB_PATH) or "."
+    if os.path.isdir(base_dir):
+        for f in Path(base_dir).iterdir():
+            if f.suffix == ".db" and pattern.match(f.stem):
+                found.add(f.stem)
+
+    return sorted(found, key=lambda x: int(pattern.match(x).group(1)))  # type: ignore[union-attr]
+
+
+def _strip_shards_from_argv() -> list[str]:
+    """Return sys.argv with --shards [N] removed."""
+    argv = sys.argv[:]
+    i = 0
+    while i < len(argv):
+        if argv[i] == "--shards":
+            argv.pop(i)
+            # Pop the optional numeric argument if present
+            if i < len(argv) and argv[i].isdigit():
+                argv.pop(i)
+        else:
+            i += 1
+    return argv
+
+
+def _set_dataset_in_argv(argv: list[str], shard_name: str) -> list[str]:
+    """Replace or insert --dataset in argv."""
+    argv = argv[:]
+    for i, arg in enumerate(argv):
+        if arg in ("--dataset", "-d", "-ds") and i + 1 < len(argv):
+            argv[i + 1] = shard_name
+            return argv
+    # Not found, insert after program name
+    argv.insert(1, "--dataset")
+    argv.insert(2, shard_name)
+    return argv
+
+
+def _ingest_shards(args):
+    """Run ingest in parallel across shard datasets."""
+    import subprocess
+
+    shard_count = args.shards
+    if shard_count == 0:
+        # Auto-discover
+        shard_names = _discover_shards(args.dataset)
+        if not shard_names:
+            print(f"Error: No shards found matching '{args.dataset}_*'")
+            sys.exit(1)
+    else:
+        shard_names = [f"{args.dataset}_{i}" for i in range(shard_count)]
+
+    base_argv = _strip_shards_from_argv()
+
+    print(f"Ingesting {len(shard_names)} shards in parallel: {', '.join(shard_names)}")
+
+    processes = []
+    for shard_name in shard_names:
+        cmd = [sys.executable, "-m", "sam3_pursuit.api.cli"] + _set_dataset_in_argv(base_argv, shard_name)[1:]
+        print(f"  Starting: {shard_name}")
+        p = subprocess.Popen(cmd, stdout=subprocess.PIPE, stderr=subprocess.STDOUT, text=True)
+        processes.append((shard_name, p))
+
+    # Collect output and wait for completion
+    failed = []
+    for shard_name, p in processes:
+        stdout, _ = p.communicate()
+        if stdout:
+            for line in stdout.rstrip().split("\n"):
+                print(f"  [{shard_name}] {line}")
+        if p.returncode != 0:
+            failed.append(shard_name)
+
+    if failed:
+        print(f"\nError: {len(failed)} shard(s) failed: {', '.join(failed)}")
+        sys.exit(1)
+
+    print(f"\nAll {len(shard_names)} shards ingested successfully.")
+
+
 def ingest_command(args):
     """Handle ingest command - bulk import images."""
+    if args.shards is not None:
+        _ingest_shards(args)
+        return
+
     # Set default data-dir based on dataset and source if not provided
     if not args.data_dir:
         if args.source:

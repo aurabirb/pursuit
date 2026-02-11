@@ -1,0 +1,15 @@
+[Unit]
+Description=FurScan Telegram Bot
+After=network.target
+
+[Service]
+Type=simple
+User=user
+WorkingDirectory=/opt/furscan/
+ExecStart=/opt/furscan/.venv/bin/python tgbot.py
+Restart=on-failure
+RestartSec=5
+EnvironmentFile=/opt/furscan/.env
+
+[Install]
+WantedBy=multi-user.target

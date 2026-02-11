@@ -377,6 +377,7 @@ def _get_ingestor(args):
     segmentor_model_name = Config.SAM3_MODEL if getattr(args, "segment", True) else None
     segmentor_concept = args.concept if hasattr(args, "concept") and args.concept else Config.DEFAULT_CONCEPT
     _auto_detect_embedder(args)
+    print(f"Using embedder: {args.get("embedder", Config.DEFAULT_EMBEDDER)}")
     embedder = _build_embedder(args)
     preprocessors = _build_preprocessors(args)
 

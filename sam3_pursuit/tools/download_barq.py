@@ -28,6 +28,29 @@ CACHE_DB = "barq_cache.db"
 EXCLUDED_POST_IDS: set[str] = set()  # Set by CLI for --exclude-datasets
 MAX_CONCURRENT_DOWNLOADS = 5
 GRAPHQL_URL = "https://api.barq.app/graphql"
+
+# Country name -> (lat, lon) for major cities used as search centers
+COUNTRY_COORDINATES: dict[str, tuple[float, float]] = {
+    "netherlands": (52.378, 4.9),
+    "switzerland": (46.948, 7.448),
+    "sweden": (59.329, 18.069),
+    "norway": (59.914, 10.752),
+    "finland": (60.170, 24.938),
+    "estonia": (59.437, 24.754),
+    "germany": (52.520, 13.405),
+    "austria": (48.208, 16.374),
+    "hungary": (47.498, 19.040),
+    "belgium": (50.850, 4.349),
+    "czech republic": (50.075, 14.438),
+    "luxembourg": (49.612, 6.130),
+    "france": (48.857, 2.352),
+    "uk": (51.507, -0.128),
+    "poland": (52.230, 21.012),
+    "denmark": (55.676, 12.568),
+    "italy": (41.903, 12.496),
+    "spain": (40.417, -3.704),
+    "portugal": (38.722, -9.139),
+}
 REQUEST_DELAY = 0.5
 MAX_RETRIES = 5
 INITIAL_BACKOFF = 5

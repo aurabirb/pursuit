@@ -203,8 +203,9 @@ Examples:
     furtrack_parser.add_argument("--exclude-datasets", "-e", help="Skip post_ids in these datasets (comma-separated)")
 
     barq_parser = download_subparsers.add_parser("barq", help="Download from Barq (requires BARQ_BEARER_TOKEN)")
-    barq_parser.add_argument("--lat", type=float, default=52.378, help="Latitude (default: Amsterdam)")
-    barq_parser.add_argument("--lon", type=float, default=4.9, help="Longitude")
+    barq_parser.add_argument("--lat", type=float, help="Latitude (default: Amsterdam)")
+    barq_parser.add_argument("--lon", type=float, help="Longitude")
+    barq_parser.add_argument("--countries", help="Comma-separated countries to search (e.g. 'netherlands,germany'). Use 'all' for all known countries.")
     barq_parser.add_argument("--max-pages", type=int, default=100, help="Max pages to fetch")
     barq_parser.add_argument("--all-images", action="store_true", help="Download all images per profile")
     barq_parser.add_argument("--max-age", type=float, help="Skip profiles cached within N days")
@@ -1127,7 +1128,32 @@ def download_command(args):
                 from sam3_pursuit.models.classifier import ImageClassifier
                 classifier = ImageClassifier()
                 score_fn = classifier.fursuit_score
-            asyncio.run(download_barq.download_all_profiles(args.lat, args.lon, args.max_pages, args.all_images, args.max_age, score_fn=score_fn, threshold=args.threshold))
+
+            # Build list of (name, lat, lon) to search
+            locations = []
+            if args.countries:
+                names = [c.strip().lower() for c in args.countries.split(",")]
+                if "all" in names:
+                    locations = [(name, *coords) for name, coords in download_barq.COUNTRY_COORDINATES.items()]
+                else:
+                    for name in names:
+                        if name not in download_barq.COUNTRY_COORDINATES:
+                            print(f"Unknown country: {name}")
+                            print(f"Available: {', '.join(sorted(download_barq.COUNTRY_COORDINATES))}")
+                            sys.exit(1)
+                        lat, lon = download_barq.COUNTRY_COORDINATES[name]
+                        locations.append((name, lat, lon))
+            elif args.lat is not None and args.lon is not None:
+                locations = [("custom", args.lat, args.lon)]
+            else:
+                locations = [("netherlands", 52.378, 4.9)]
+
+            for name, lat, lon in locations:
+                if len(locations) > 1:
+                    print(f"\n{'='*60}")
+                    print(f"Searching: {name.title()} ({lat}, {lon})")
+                    print(f"{'='*60}")
+                asyncio.run(download_barq.download_all_profiles(lat, lon, args.max_pages, args.all_images, args.max_age, score_fn=score_fn, threshold=args.threshold))
 
     else:
         print("Error: Use 'pursuit download furtrack' or 'pursuit download barq'")

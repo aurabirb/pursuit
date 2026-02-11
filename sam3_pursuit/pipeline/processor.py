@@ -167,6 +167,8 @@ class CachedProcessingPipeline:
             )
             if segmentations:
                 return segmentations, True
+            mask_dir = self.mask_storage.get_mask_dir(cache_key.source, self.segmentor.model_name, self.segmentor_concept)
+            print(f"WARN: not using pre-computed segmentations for {mask_dir / (cache_key.post_id + '_seg_*.png')}")
 
         segmentations = self.segmentor.segment(image)
 

@@ -73,7 +73,6 @@ class MaskStorage:
         if conffile.exists():
             with open(conffile, 'rb') as f:
                 content = f.read()
-                print(f'{len(content)} // {struct.calcsize("d")}')
                 size = len(content) // struct.calcsize('d')
                 confs = list(struct.unpack(f'{size}d', content))
         masks = self.find_masks_for_post(post_id, source, model, concept)

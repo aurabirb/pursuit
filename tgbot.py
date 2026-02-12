@@ -5,6 +5,7 @@ import html
 import os
 import re
 import sys
+import traceback
 from pathlib import Path
 from tempfile import NamedTemporaryFile
 
@@ -52,7 +53,7 @@ def get_identifiers():
             f"No datasets found in {base_dir}. "
             "Expected *.db and *.index file pairs."
         )
-    names = [db_path for db_path, _ in datasets]
+    names = [Path(db_path).stem for db_path, _ in datasets]
     print(f"Auto-discovered {len(datasets)} dataset(s): {', '.join(names)}")
     _identifiers = [
         FursuitIdentifier(
@@ -154,7 +155,7 @@ async def add_photo(update: Update, context: ContextTypes.DEFAULT_TYPE, characte
             )
 
     except Exception as e:
-        print(f"Error adding image: {e}", file=sys.stderr)
+        traceback.print_exc()
         await context.bot.send_message(
             chat_id=update.effective_chat.id,
             text="Error adding image. Please try again."
@@ -228,7 +229,7 @@ async def identify_photo(update: Update, context: ContextTypes.DEFAULT_TYPE):
     try:
         await identify_and_send(context, update.effective_chat.id, update.message.effective_attachment)
     except Exception as e:
-        print(f"Error identifying photo: {e}", file=sys.stderr)
+        traceback.print_exc()
         await context.bot.send_message(chat_id=update.effective_chat.id, text="Error identifying photo. Please try again.")
 
 
@@ -252,7 +253,7 @@ async def whodis(update: Update, context: ContextTypes.DEFAULT_TYPE):
     try:
         await identify_and_send(context, update.effective_chat.id, reply_to.photo, reply_to.message_id)
     except Exception as e:
-        print(f"Error in whodis: {e}", file=sys.stderr)
+        traceback.print_exc()
         await context.bot.send_message(
             chat_id=update.effective_chat.id,
             text="Error identifying photo. Please try again."
@@ -288,7 +289,7 @@ async def reply_to_photo(update: Update, context: ContextTypes.DEFAULT_TYPE):
     try:
         await identify_and_send(context, update.effective_chat.id, reply_to.photo, reply_to.message_id)
     except Exception as e:
-        print(f"Error in reply_to_photo: {e}", file=sys.stderr)
+        traceback.print_exc()
         await context.bot.send_message(
             chat_id=update.effective_chat.id, reply_to_message_id=reply_to.message_id, text="Error identifying photo. Please try again."
         )
@@ -393,7 +394,7 @@ async def show(update: Update, context: ContextTypes.DEFAULT_TYPE):
             )
 
     except Exception as e:
-        print(f"Error in show: {e}", file=sys.stderr)
+        traceback.print_exc()
         await context.bot.send_message(
             chat_id=update.effective_chat.id,
             text="Error looking up character. Please try again."
@@ -488,7 +489,7 @@ async def search(update: Update, context: ContextTypes.DEFAULT_TYPE):
                 await context.bot.send_media_group(
                     chat_id=update.effective_chat.id, media=media[i:i+10])
     except Exception as e:
-        print(f"Error in search: {e}", file=sys.stderr)
+        traceback.print_exc()
         await context.bot.send_message(
             chat_id=update.effective_chat.id,
             text="Error performing search. Please try again."
@@ -517,7 +518,7 @@ async def stats(update: Update, context: ContextTypes.DEFAULT_TYPE):
         await context.bot.send_message(chat_id=update.effective_chat.id, text=msg)
 
     except Exception as e:
-        print(f"Error getting stats: {e}", file=sys.stderr)
+        traceback.print_exc()
         await context.bot.send_message(
             chat_id=update.effective_chat.id,
             text="Error getting stats. Please try again."

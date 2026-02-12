@@ -10,6 +10,9 @@ Usage:
     # Single image with known character
     python tools/compare_embedders.py --image path/to/img.jpg --character "eon_(gryphon)"
 
+    # Ground truth CSV file (image_path,char1,char2,...)
+    python tools/compare_embedders.py --ground-truth tests/ground_truth.csv
+
     # Directory of test images (character inferred from parent dir name)
     python tools/compare_embedders.py --image-dir path/to/test_images/
 
@@ -21,6 +24,7 @@ Usage:
 """
 
 import argparse
+import csv
 import gc
 import sys
 from collections import defaultdict
@@ -49,6 +53,7 @@ def parse_args():
     group = parser.add_mutually_exclusive_group(required=True)
     group.add_argument("--image", type=str, help="Path to a single test image")
     group.add_argument("--image-dir", type=str, help="Directory of test images")
+    group.add_argument("--ground-truth", type=str, help="Ground truth CSV: image_path,char1[,char2,...]")
     parser.add_argument("--character", "-c", type=str, help="Ground truth character name (for single image)")
     parser.add_argument("--top-k", type=int, default=10, help="Number of results per dataset (default: 10)")
     parser.add_argument("--output", "-o", type=str, default="tools/embedder_comparison_results.txt",
@@ -63,13 +68,41 @@ def dataset_name(db_path: str) -> str:
     return Path(db_path).stem
 
 
-def load_test_images(args) -> list[tuple[str, str | None]]:
-    """Return list of (image_path, ground_truth_character) tuples."""
+def load_test_images(args) -> list[tuple[str, list[str] | None]]:
+    """Return list of (image_path, ground_truth_characters) tuples.
+
+    Ground truth is a list of character names, one per segment (ordered by
+    segment confidence). None if no ground truth is available.
+    """
     IMAGE_EXTS = {".jpg", ".jpeg", ".png", ".webp", ".bmp"}
     images = []
 
     if args.image:
-        images.append((args.image, args.character))
+        gt = [args.character] if args.character else None
+        images.append((args.image, gt))
+    elif args.ground_truth:
+        gt_path = Path(args.ground_truth)
+        if not gt_path.exists():
+            # Try relative to project root
+            gt_path = Path(Config.BASE_DIR) / args.ground_truth
+        if not gt_path.exists():
+            print(f"Error: ground truth file not found: {args.ground_truth}")
+            sys.exit(1)
+        with open(gt_path, newline="") as f:
+            reader = csv.reader(f)
+            header = next(reader, None)  # skip header
+            for row in reader:
+                if not row or not row[0].strip():
+                    continue
+                img_path = row[0].strip()
+                # Resolve relative paths against project root
+                if not Path(img_path).is_absolute():
+                    img_path = str(Path(Config.BASE_DIR) / img_path)
+                chars = [c.strip() for c in row[1:] if c.strip()]
+                images.append((img_path, chars if chars else None))
+        if not images:
+            print(f"Error: no entries in ground truth file: {args.ground_truth}")
+            sys.exit(1)
     elif args.image_dir:
         img_dir = Path(args.image_dir)
         if not img_dir.is_dir():
@@ -77,8 +110,7 @@ def load_test_images(args) -> list[tuple[str, str | None]]:
             sys.exit(1)
         for f in sorted(img_dir.rglob("*")):
             if f.suffix.lower() in IMAGE_EXTS:
-                # Infer character from parent directory name
-                gt = f.parent.name if f.parent != img_dir else None
+                gt = [f.parent.name] if f.parent != img_dir else None
                 images.append((str(f), gt))
         if not images:
             print(f"Error: no images found in {args.image_dir}")
@@ -122,6 +154,7 @@ def get_dataset_overview(datasets: list[tuple[str, str, str]]) -> tuple[str, lis
     for name, db_path, index_path in datasets:
         db = Database(db_path)
         stats = db.get_stats()
+        all_chars = {c.lower() for c in db.get_all_character_names()}
         emb_name = detect_embedder(db_path, default="unknown")
         try:
             idx = VectorIndex(index_path, embedding_dim=768)
@@ -132,7 +165,10 @@ def get_dataset_overview(datasets: list[tuple[str, str, str]]) -> tuple[str, lis
         chars = stats.get("unique_characters", 0)
         avg = total / chars if chars else 0
         lines.append(f"{name:<15} {emb_name:<12} {total:>10,} {chars:>12,} {avg:>10.1f}")
-        ds_infos.append({"name": name, "embedder": emb_name, "total": total, "chars": chars})
+        ds_infos.append({
+            "name": name, "embedder": emb_name, "total": total,
+            "chars": chars, "all_characters": all_chars,
+        })
 
     lines.append("")
     return "\n".join(lines), ds_infos
@@ -143,112 +179,151 @@ def format_segment_results(
     emb_name: str,
     total_entries: int,
     segment_results: list[SegmentResults],
-    ground_truth: str | None,
+    ground_truth: list[str] | None,
+    ds_characters: set[str] | None,
     top_k: int,
-) -> tuple[str, dict, str | None]:
-    """Format results for one dataset + one image. Returns (text, metrics_dict, top1_char)."""
+) -> tuple[str, list[dict], str | None]:
+    """Format results for one dataset + one image.
+
+    Returns (text, list_of_per_segment_metrics, top1_char_for_segment_0).
+    Each metric dict includes 'in_dataset' to indicate if the ground truth
+    character exists in this dataset.
+    """
     lines = []
-    metrics = {
-        "dataset": name,
-        "embedder": emb_name,
-        "segments": len(segment_results),
-        "top1_correct": False,
-        "topk_correct": False,
-        "correct_rank": None,
-        "top1_confidence": 0.0,
-        "top2_confidence": 0.0,
-        "confidence_gap": 0.0,
-    }
+    seg_metrics = []
     top1_char = None
 
     lines.append(f"  Dataset: {name} ({emb_name}, {total_entries:,} entries)")
 
     if not segment_results:
         lines.append("    (no segments found)")
-        return "\n".join(lines), metrics, top1_char
+        return "\n".join(lines), seg_metrics, top1_char
 
     for seg in segment_results:
+        # Determine ground truth for this segment
+        seg_gt = None
+        if ground_truth and seg.segment_index < len(ground_truth):
+            seg_gt = ground_truth[seg.segment_index]
+
+        in_dataset = True
+        if seg_gt and ds_characters is not None:
+            in_dataset = seg_gt.lower() in ds_characters
+
+        metrics = {
+            "dataset": name,
+            "embedder": emb_name,
+            "segment_index": seg.segment_index,
+            "ground_truth": seg_gt,
+            "in_dataset": in_dataset,
+            "top1_correct": False,
+            "topk_correct": False,
+            "correct_rank": None,
+            "top1_confidence": 0.0,
+            "top2_confidence": 0.0,
+            "confidence_gap": 0.0,
+        }
+
         if len(segment_results) > 1:
-            lines.append(f"    Segment {seg.segment_index} (bbox={seg.segment_bbox}, conf={seg.segment_confidence:.2f}):")
+            gt_label = f", gt={seg_gt}" if seg_gt else ""
+            in_ds_label = "" if in_dataset else " [NOT IN DATASET]"
+            lines.append(f"    Segment {seg.segment_index} (bbox={seg.segment_bbox}, conf={seg.segment_confidence:.2f}{gt_label}){in_ds_label}:")
+        elif seg_gt and not in_dataset:
+            lines.append(f"    [NOT IN DATASET: {seg_gt}]")
+
         if not seg.matches:
             lines.append("    (no matches)")
+            seg_metrics.append(metrics)
             continue
 
         for rank, match in enumerate(seg.matches[:top_k], 1):
             marker = ""
-            if ground_truth and match.character_name and match.character_name.lower() == ground_truth.lower():
+            if seg_gt and match.character_name and match.character_name.lower() == seg_gt.lower():
                 marker = " <-- CORRECT"
             lines.append(f"    #{rank}: {match.character_name} ({match.confidence:.1%}){marker}")
 
-        # Metrics from first segment (primary)
-        if seg.segment_index == 0 and seg.matches:
+        if seg.matches:
             top1 = seg.matches[0]
-            top1_char = top1.character_name
+            if seg.segment_index == 0:
+                top1_char = top1.character_name
             metrics["top1_confidence"] = top1.confidence
             if len(seg.matches) > 1:
                 metrics["top2_confidence"] = seg.matches[1].confidence
                 metrics["confidence_gap"] = top1.confidence - seg.matches[1].confidence
 
-            if ground_truth:
+            if seg_gt and in_dataset:
                 for rank, match in enumerate(seg.matches[:top_k], 1):
-                    if match.character_name and match.character_name.lower() == ground_truth.lower():
+                    if match.character_name and match.character_name.lower() == seg_gt.lower():
                         if rank == 1:
                             metrics["top1_correct"] = True
                         metrics["topk_correct"] = True
                         metrics["correct_rank"] = rank
                         break
 
-    return "\n".join(lines), metrics, top1_char
+        seg_metrics.append(metrics)
+
+    return "\n".join(lines), seg_metrics, top1_char
 
 
 def format_summary(
     all_metrics: list[list[dict]],
     top1_chars: list[dict[str, str | None]],
-    test_images: list[tuple[str, str | None]],
+    test_images: list[tuple[str, list[str] | None]],
     ds_names: list[str],
     top_k: int,
 ) -> str:
     """Format summary statistics across all images."""
     lines = ["SUMMARY", "=" * 70]
 
+    # Flatten: collect per-segment metrics grouped by dataset
     by_dataset: dict[str, list[dict]] = defaultdict(list)
     for image_metrics in all_metrics:
         for m in image_metrics:
             by_dataset[m["dataset"]].append(m)
 
     has_gt = any(gt for _, gt in test_images)
-    n_images = len(all_metrics)
 
     if has_gt:
         lines.append("")
-        lines.append(f"Accuracy (over {n_images} image(s), top-k={top_k}):")
-        lines.append(f"{'Dataset':<15} {'Embedder':<12} {'Top-1 Acc':>10} {'Top-k Acc':>10} {'Avg Conf':>10} {'Avg Gap':>10}")
-        lines.append("-" * 70)
+        lines.append(f"Accuracy (top-k={top_k}, only counting images where character is in dataset):")
+        lines.append(f"{'Dataset':<15} {'Embedder':<12} {'Tested':>7} {'Skip':>5} {'Top-1':>8} {'Top-k':>8} {'Avg Conf':>9} {'Avg Gap':>9}")
+        lines.append("-" * 80)
 
         for ds_name in ds_names:
             metrics = by_dataset.get(ds_name, [])
             if not metrics:
                 continue
-            emb = metrics[0]["embedder"]
-            n = len(metrics)
-            top1_acc = sum(1 for m in metrics if m["top1_correct"]) / n * 100
-            topk_acc = sum(1 for m in metrics if m["topk_correct"]) / n * 100
-            avg_conf = sum(m["top1_confidence"] for m in metrics) / n
-            avg_gap = sum(m["confidence_gap"] for m in metrics) / n
-            lines.append(f"{ds_name:<15} {emb:<12} {top1_acc:>9.1f}% {topk_acc:>9.1f}% {avg_conf:>9.1%} {avg_gap:>9.1%}")
+            # Only count segments that have ground truth AND character is in dataset
+            with_gt = [m for m in metrics if m.get("ground_truth")]
+            in_ds = [m for m in with_gt if m.get("in_dataset", True)]
+            not_in_ds = len(with_gt) - len(in_ds)
 
-        # Head-to-head
+            emb = metrics[0]["embedder"]
+            n = len(in_ds)
+            if n == 0:
+                lines.append(f"{ds_name:<15} {emb:<12} {'0':>7} {not_in_ds:>5} {'N/A':>8} {'N/A':>8} {'N/A':>9} {'N/A':>9}")
+                continue
+            top1_acc = sum(1 for m in in_ds if m["top1_correct"]) / n * 100
+            topk_acc = sum(1 for m in in_ds if m["topk_correct"]) / n * 100
+            avg_conf = sum(m["top1_confidence"] for m in in_ds) / n
+            avg_gap = sum(m["confidence_gap"] for m in in_ds) / n
+            lines.append(f"{ds_name:<15} {emb:<12} {n:>7} {not_in_ds:>5} {top1_acc:>7.1f}% {topk_acc:>7.1f}% {avg_conf:>8.1%} {avg_gap:>8.1%}")
+
+        # Head-to-head (only for segment 0, only where both datasets have the character)
         if len(ds_names) >= 2:
             lines.append("")
-            lines.append("Head-to-head (first segment, top-1):")
+            lines.append("Head-to-head (segment 0, top-1, only where both datasets have character):")
             for i in range(len(ds_names)):
                 for j in range(i + 1, len(ds_names)):
                     a_name, b_name = ds_names[i], ds_names[j]
                     a_wins, b_wins, ties, both_wrong = 0, 0, 0, 0
                     for image_metrics in all_metrics:
-                        a_m = next((m for m in image_metrics if m["dataset"] == a_name), None)
-                        b_m = next((m for m in image_metrics if m["dataset"] == b_name), None)
+                        a_m = next((m for m in image_metrics if m["dataset"] == a_name and m.get("segment_index", 0) == 0), None)
+                        b_m = next((m for m in image_metrics if m["dataset"] == b_name and m.get("segment_index", 0) == 0), None)
                         if not a_m or not b_m:
+                            continue
+                        if not a_m.get("ground_truth") or not b_m.get("ground_truth"):
+                            continue
+                        if not a_m.get("in_dataset", True) or not b_m.get("in_dataset", True):
                             continue
                         a_ok = a_m["top1_correct"]
                         b_ok = b_m["top1_correct"]
@@ -284,7 +359,7 @@ def format_summary(
     # Agreement analysis using tracked top-1 characters
     if len(ds_names) >= 2 and top1_chars:
         lines.append("")
-        lines.append("Top-1 Agreement:")
+        lines.append("Top-1 Agreement (segment 0):")
         lines.append("-" * 40)
         for i in range(len(ds_names)):
             for j in range(i + 1, len(ds_names)):
@@ -306,7 +381,8 @@ def format_summary(
                     for k, tc in enumerate(top1_chars):
                         if tc.get(a) and tc.get(b) and tc[a].lower() != tc[b].lower():
                             img_name = Path(test_images[k][0]).name
-                            gt = test_images[k][1] or "?"
+                            gt_chars = test_images[k][1]
+                            gt = gt_chars[0] if gt_chars else "?"
                             lines.append(
                                 f"      {img_name} (gt={gt}): {a}={tc[a]}, {b}={tc[b]}"
                             )
@@ -348,8 +424,13 @@ def main():
     overview_text, ds_infos = get_dataset_overview(datasets)
     output_lines.append(overview_text)
 
+    # Build per-dataset character sets for existence checking
+    ds_characters: dict[str, set[str]] = {}
+    for info in ds_infos:
+        ds_characters[info["name"]] = info["all_characters"]
+
     # Pre-load all test images
-    loaded_images: list[tuple[Image.Image | None, str, str | None]] = []
+    loaded_images: list[tuple[Image.Image | None, str, list[str] | None]] = []
     for img_path, ground_truth in test_images:
         try:
             image = Image.open(img_path).convert("RGB")
@@ -359,11 +440,11 @@ def main():
             loaded_images.append((None, img_path, ground_truth))
 
     # Results storage: per-image, per-dataset
-    # image_results[img_idx][ds_name] = (text, metrics, top1_char)
-    image_results: list[dict[str, tuple[str, dict, str | None]]] = [
+    # image_results[img_idx][ds_name] = (text, seg_metrics, top1_char)
+    image_results: list[dict[str, tuple[str, list[dict], str | None]]] = [
         {} for _ in loaded_images
     ]
-    # Raw segment results for RRF merge: image_segments[img_idx][ds_name] = list[SegmentResults]
+    # Raw segment results for RRF merge
     image_segments: list[dict[str, list[SegmentResults]]] = [
         {} for _ in loaded_images
     ]
@@ -372,6 +453,7 @@ def main():
     for ds_idx, (name, db_path, index_path) in enumerate(datasets):
         emb_name = ds_infos[ds_idx]["embedder"]
         total_entries = ds_infos[ds_idx]["total"]
+        chars = ds_characters.get(name, set())
 
         print(f"\n--- Loading dataset: {name} ({emb_name}) ---")
         try:
@@ -394,13 +476,14 @@ def main():
                 segment_results = ident.identify(image, top_k=args.top_k)
             except Exception as e:
                 text = f"  Dataset: {name} ({emb_name}, {total_entries:,} entries)\n    ERROR: {e}"
-                image_results[img_idx][name] = (text, {"dataset": name, "embedder": emb_name}, None)
+                image_results[img_idx][name] = (text, [], None)
                 continue
 
-            text, metrics, top1_char = format_segment_results(
-                name, emb_name, total_entries, segment_results, ground_truth, args.top_k
+            text, seg_metrics, top1_char = format_segment_results(
+                name, emb_name, total_entries, segment_results,
+                ground_truth, chars, args.top_k,
             )
-            image_results[img_idx][name] = (text, metrics, top1_char)
+            image_results[img_idx][name] = (text, seg_metrics, top1_char)
             image_segments[img_idx][name] = segment_results
 
         # Free GPU memory before loading next dataset
@@ -419,7 +502,7 @@ def main():
         output_lines.append(f"\nImage: {Path(img_path).name}")
         output_lines.append(f"Path: {img_path}")
         if ground_truth:
-            output_lines.append(f"Ground truth: {ground_truth}")
+            output_lines.append(f"Ground truth: {', '.join(ground_truth)}")
         output_lines.append("")
 
         if image is None:
@@ -433,10 +516,10 @@ def main():
         for name in ds_names:
             if name not in image_results[img_idx]:
                 continue
-            text, metrics, top1_char = image_results[img_idx][name]
+            text, seg_metrics, top1_char = image_results[img_idx][name]
             output_lines.append(text)
             output_lines.append("")
-            img_metrics.append(metrics)
+            img_metrics.extend(seg_metrics)
             img_top1[name] = top1_char
 
         all_metrics.append(img_metrics)
@@ -460,15 +543,20 @@ def main():
 
             output_lines.append(f"\nImage: {Path(img_path).name}")
             if ground_truth:
-                output_lines.append(f"Ground truth: {ground_truth}")
+                output_lines.append(f"Ground truth: {', '.join(ground_truth)}")
             output_lines.append(f"  Combined ({' + '.join(name for name in ds_names if name in segments_by_ds)}):")
 
             for seg in merged:
+                seg_gt = None
+                if ground_truth and seg.segment_index < len(ground_truth):
+                    seg_gt = ground_truth[seg.segment_index]
+
                 if len(merged) > 1:
-                    output_lines.append(f"    Segment {seg.segment_index}:")
+                    gt_label = f", gt={seg_gt}" if seg_gt else ""
+                    output_lines.append(f"    Segment {seg.segment_index}{gt_label}:")
                 for rank, m in enumerate(seg.matches[:args.top_k], 1):
                     marker = ""
-                    if ground_truth and m.character_name and m.character_name.lower() == ground_truth.lower():
+                    if seg_gt and m.character_name and m.character_name.lower() == seg_gt.lower():
                         marker = " <-- CORRECT"
                     output_lines.append(f"    #{rank}: {m.character_name} ({m.confidence:.1%}){marker}")
             output_lines.append("")

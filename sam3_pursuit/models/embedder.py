@@ -65,6 +65,13 @@ class SigLIPEmbedder:
         self.model = AutoModel.from_pretrained(model_name).to(self.device)
         self.model.eval()
         self.embedding_dim = self.model.config.vision_config.hidden_size
+        self._tokenizer = None
+
+    def _get_tokenizer(self):
+        if self._tokenizer is None:
+            from transformers import GemmaTokenizerFast
+            self._tokenizer = GemmaTokenizerFast.from_pretrained(self.model_name)
+        return self._tokenizer
 
     def embed(self, image: Image.Image) -> np.ndarray:
         inputs = self.processor(images=image, return_tensors="pt").to(self.device)
@@ -75,8 +82,7 @@ class SigLIPEmbedder:
         return embedding.cpu().numpy().flatten()
 
     def embed_text(self, text: str) -> np.ndarray:
-        from transformers import AutoTokenizer
-        tokenizer = AutoTokenizer.from_pretrained(self.model_name)
+        tokenizer = self._get_tokenizer()
         inputs = tokenizer([text], return_tensors="pt", padding=True).to(self.device)
         with torch.no_grad():
             features = self.model.get_text_features(**inputs)

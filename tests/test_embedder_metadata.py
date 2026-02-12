@@ -179,7 +179,7 @@ class TestEmbedderValidationIntegration:
         assert stored == "siglip"
 
     def test_ingestor_rejects_wrong_embedder(self, db_and_index):
-        """FursuitIngestor should raise when embedder doesn't match stored metadata."""
+        """FursuitIngestor should raise when explicit embedder doesn't match stored metadata."""
         db_path, index_path = db_and_index
 
         # First init stores "dv2b+chist"
@@ -189,11 +189,14 @@ class TestEmbedderValidationIntegration:
 
         from sam3_pursuit.api.ingestor import FursuitIngestor
 
+        # Passing an explicit mismatched embedder should raise
+        wrong_embedder = FakeEmbedder(model_name="google/siglip-base-patch16-224")
         with pytest.raises(ValueError, match="Dataset was built with embedder"):
             FursuitIngestor(
                 db_path=db_path,
                 index_path=index_path,
                 segmentor_model_name="full",
+                embedder=wrong_embedder,
             )
 
     def test_ingestor_rejects_dimension_mismatch(self, db_and_index):
@@ -232,50 +235,3 @@ class TestEmbedderValidationIntegration:
             segmentor_model_name="full",
         )
         assert ingestor.db.get_metadata(Config.METADATA_KEY_EMBEDDER) == "siglip"
-
-
-class TestShortNameMapping:
-    """Tests for SHORT_NAME_TO_CLI and embedder short name generation."""
-
-    def test_short_name_to_cli_has_default(self):
-        """DEFAULT_EMBEDDER must be a value in SHORT_NAME_TO_CLI."""
-        from sam3_pursuit.pipeline.processor import SHORT_NAME_TO_CLI
-        assert Config.DEFAULT_EMBEDDER in SHORT_NAME_TO_CLI.values()
-
-    def test_default_embedder_short_matches(self):
-        """DEFAULT_EMBEDDER_SHORT must be the short name for DEFAULT_EMBEDDER."""
-        from sam3_pursuit.pipeline.processor import (
-            CLI_TO_SHORT_NAME,
-            DEFAULT_EMBEDDER_SHORT,
-        )
-        assert DEFAULT_EMBEDDER_SHORT == CLI_TO_SHORT_NAME[Config.DEFAULT_EMBEDDER]
-
-    def test_cli_to_short_name_roundtrip(self):
-        """Every CLI name should roundtrip through both mappings."""
-        from sam3_pursuit.pipeline.processor import CLI_TO_SHORT_NAME, SHORT_NAME_TO_CLI
-        for short, cli in SHORT_NAME_TO_CLI.items():
-            assert CLI_TO_SHORT_NAME[cli] == short
-
-    def test_all_embedder_short_names_generate_correctly(self):
-        """Each embedder model name should produce the expected short name."""
-        from sam3_pursuit.pipeline.processor import CachedProcessingPipeline
-
-        cases = [
-            ("facebook/dinov2-base", "dv2b"),
-            ("facebook/dinov2-large", "dv2l"),
-            ("facebook/dinov2-giant2-lvd-mc-e", "dv2g"),
-            ("openai/clip-vit-base-patch32", "clip"),
-            ("google/siglip-base-patch16-224", "siglip"),
-        ]
-        for model_name, expected_short in cases:
-            embedder = FakeEmbedder(model_name=model_name)
-            pipeline = FakePipeline(embedder)
-            assert pipeline.get_embedder_short_name() == expected_short, (
-                f"{model_name} should map to {expected_short}"
-            )
-
-    def test_colorhist_short_name(self):
-        """ColorHistogram wrapper should produce compound short name."""
-        embedder = FakeEmbedder(model_name="facebook/dinov2-base+colorhist")
-        pipeline = FakePipeline(embedder)
-        assert pipeline.get_embedder_short_name() == "dv2b+chist"

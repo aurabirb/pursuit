@@ -41,7 +41,7 @@ class Config:
     METADATA_KEY_EMBEDDER = "embedder"
 
     # Models
-    DEFAULT_EMBEDDER = "siglip"  # CLI --embedder default
+    DEFAULT_EMBEDDER = "siglip"  # --embedder default short name
     SAM3_VRAM_REQUIRED_GB = 4  # SAM3 needs ~4GB VRAM
     SAM3_MODEL = "sam3"
     DINOV2_MODEL = "facebook/dinov2-base"

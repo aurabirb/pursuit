@@ -368,7 +368,8 @@ class TestIdentification(unittest.TestCase):
             # Add first two Blazi images
             added = identifier.add_images(
                 character_names=["Blazi", "Blazi"],
-                image_paths=self.BLAZI_IMAGES[:2]
+                image_paths=self.BLAZI_IMAGES[:2],
+                source="manual",
             )
             self.assertGreater(added, 0, "Should add at least one embedding")
 

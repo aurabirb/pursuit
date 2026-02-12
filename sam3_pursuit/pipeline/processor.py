@@ -44,13 +44,6 @@ SHORT_NAME_TO_CLI = {
     "dv2b+chist": "dinov2-base+colorhist",
 }
 
-# Reverse lookup: CLI name -> short name
-CLI_TO_SHORT_NAME = {v: k for k, v in SHORT_NAME_TO_CLI.items()}
-
-# Short name for the default embedder
-DEFAULT_EMBEDDER_SHORT = CLI_TO_SHORT_NAME[Config.DEFAULT_EMBEDDER]
-
-
 class CachedProcessingPipeline:
     """Segment, isolate, and embed an image."""
 
@@ -92,16 +85,10 @@ class CachedProcessingPipeline:
 
     @staticmethod
     def _short_name_for(emb: str) -> str:
-        if "dinov2-base" in emb:
-            return "dv2b"
-        elif "dinov2-large" in emb:
-            return "dv2l"
-        elif "dinov2-giant" in emb:
-            return "dv2g"
-        elif "clip-vit-base" in emb:
-            return "clip"
-        elif "siglip" in emb:
-            return "siglip"
+        # Check if any CLI name is a substring of the full model name
+        for short, cli in SHORT_NAME_TO_CLI.items():
+            if cli in emb:
+                return short
         return emb.split("/")[-1][:8]
 
     def build_preprocessing_info(self) -> str:

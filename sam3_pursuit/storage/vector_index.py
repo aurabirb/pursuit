@@ -23,6 +23,8 @@ class VectorIndex:
         self.index = self._load_or_create_index()
         # Update embedding_dim from loaded index (may differ from constructor default)
         self.embedding_dim = self.index.d
+        if embedding_dim != self.embedding_dim:
+            print(f"WARN: Vector index {index_path} has {self.embedding_dim} dimensions, not the provided default {embedding_dim}")
 
     def _load_or_create_index(self) -> faiss.IndexHNSWFlat:
         if os.path.exists(self.index_path):

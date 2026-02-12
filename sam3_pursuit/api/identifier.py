@@ -8,7 +8,7 @@ from PIL import Image
 
 from sam3_pursuit.config import Config, sanitize_path_component
 from sam3_pursuit.models.preprocessor import IsolationConfig
-from sam3_pursuit.pipeline.processor import CachedProcessingPipeline, CacheKey
+from sam3_pursuit.pipeline.processor import CachedProcessingPipeline, CacheKey, SHORT_NAME_TO_CLI
 from sam3_pursuit.storage.database import Database
 from sam3_pursuit.storage.vector_index import VectorIndex
 
@@ -65,11 +65,12 @@ def discover_datasets(base_dir: str = Config.BASE_DIR) -> list[tuple[str, str]]:
 
 
 class FursuitIdentifier:
-    """Read-only identification across one or more datasets."""
+    """Read-only identification across a dataset."""
 
     def __init__(
         self,
-        datasets: list[tuple[str, str]],
+        db_path: str,
+        index_path: str,
         device: Optional[str] = None,
         isolation_config: Optional[IsolationConfig] = None,
         segmentor_model_name: Optional[str] = "",
@@ -77,17 +78,15 @@ class FursuitIdentifier:
         embedder=None,
         preprocessors: Optional[list] = None,
     ):
-        """
-        Args:
-            datasets: list of (db_path, index_path) tuples to search across.
-        """
 
-        self.stores: list[tuple[Database, VectorIndex]] = []
+        if not embedder:
+            emb = detect_embedder(db_path=db_path)
+            embedder = build_embedder_for_name(short_name = emb, device = device)
+
         embedding_dim = embedder.embedding_dim if embedder else Config.EMBEDDING_DIM
-        for db_path, index_path in datasets:
-            db = Database(db_path)
-            index = VectorIndex(index_path, embedding_dim=embedding_dim)
-            self.stores.append((db, index))
+
+        self.db = Database(db_path)
+        self.index = VectorIndex(index_path, embedding_dim=embedding_dim)
 
         # Non-cached pipeline for query processing only
         self.pipeline = CachedProcessingPipeline(
@@ -110,7 +109,7 @@ class FursuitIdentifier:
 
     @property
     def total_index_size(self) -> int:
-        return sum(index.size for _, index in self.stores)
+        return self.index.size
 
     def identify(
         self,
@@ -120,7 +119,7 @@ class FursuitIdentifier:
         crop_prefix: str = "query",
     ) -> list[SegmentResults]:
         if self.total_index_size == 0:
-            print("Warning: All indexes are empty, no matches possible")
+            print("WARN: Index is empty, no matches possible")
             return []
 
         # Generate cache key from image content so segmentation masks are
@@ -146,32 +145,30 @@ class FursuitIdentifier:
             ))
         return segment_results
 
-    def _search_embedding(self, embedding: np.ndarray, top_k: int) -> list[IdentificationResult]:
-        """Search all stores, merge results, deduplicate by character (best confidence wins)."""
+    def _search_embedding(self, embedding: np.ndarray, top_k: int):
         all_results: list[IdentificationResult] = []
 
-        for db, index in self.stores:
-            if index.size == 0:
+        if self.total_index_size == 0:
+            return all_results
+        distances, indices = self.index.search(embedding, top_k * 2)
+        for distance, idx in zip(distances[0], indices[0]):
+            if idx == -1:
                 continue
-            distances, indices = index.search(embedding, top_k * 2)
-            for distance, idx in zip(distances[0], indices[0]):
-                if idx == -1:
-                    continue
-                detection = db.get_detection_by_embedding_id(int(idx))
-                if detection is None:
-                    continue
-                confidence = max(0.0, 1.0 - distance / 2.0)
-                all_results.append(IdentificationResult(
-                    character_name=detection.character_name,
-                    confidence=confidence,
-                    distance=float(distance),
-                    post_id=detection.post_id,
-                    bbox=(detection.bbox_x, detection.bbox_y,
-                          detection.bbox_width, detection.bbox_height),
-                    segmentor_model=detection.segmentor_model,
-                    source=detection.source,
-                ))
-
+            detection = self.db.get_detection_by_embedding_id(int(idx))
+            if detection is None:
+                continue
+            confidence = max(0.0, 1.0 - distance / 2.0)
+            all_results.append(IdentificationResult(
+                character_name=detection.character_name,
+                confidence=confidence,
+                distance=float(distance),
+                post_id=detection.post_id,
+                bbox=(detection.bbox_x, detection.bbox_y,
+                        detection.bbox_width, detection.bbox_height),
+                segmentor_model=detection.segmentor_model,
+                source=detection.source,
+            ))
+        # TODO: maybe deduplicate by character name?
         all_results.sort(key=lambda x: x.confidence, reverse=True)
         return all_results[:top_k]
 
@@ -190,38 +187,45 @@ class FursuitIdentifier:
         return self._search_embedding(embedding, top_k)
 
     def get_stats(self) -> dict:
-        """Aggregated stats across all stores."""
-        if len(self.stores) == 1:
-            db, index = self.stores[0]
-            stats = db.get_stats()
-            stats["index_size"] = index.size
-            return stats
+        stats = self.db.get_stats()
+        stats["index_size"] = self.total_index_size
+        return stats
 
+    @staticmethod
+    def get_combined_stats(stats_list: list[dict]):
+        from collections import Counter
         # Multi-dataset: aggregate
-        total_detections = 0
-        all_characters = set()
-        all_posts = set()
-        total_index_size = 0
-
-        for db, index in self.stores:
-            stats = db.get_stats()
-            total_detections += stats["total_detections"]
-            total_index_size += index.size
-            # Get character names from this db
-            all_characters.update(db.get_all_character_names())
-            # Get post ids
-            conn = db._connect()
-            cursor = conn.cursor()
-            cursor.execute("SELECT DISTINCT post_id FROM detections")
-            all_posts.update(row[0] for row in cursor.fetchall())
-
-        return {
-            "total_detections": total_detections,
-            "unique_characters": len(all_characters),
-            "unique_posts": len(all_posts),
-            "index_size": total_index_size,
-            "num_datasets": len(self.stores),
+        ret = {
+            "total_detections": 0,
+            "unique_characters": 0,
+            "unique_posts": 0,
+            "top_characters": 0,
+            "segmentor_breakdown": {},
+            "preprocessing_breakdown": {},
+            "git_version_breakdown": {},
+            "source_breakdown": {},
+            "index_size": 0,
+            "num_datasets": len(stats_list),
         }
+        for k, v in ret.items():
+            if isinstance(v, dict):
+                cnt = Counter(v)
+                for stats in stats_list:
+                    cnt.update(stats.get(k, {}))
+                ret[k] = dict(cnt)
+            else:
+                ret[k] = sum([stats.get(k, 0) for stats in stats_list])
+        return ret
+
+
+def detect_embedder(db_path: str, default: str = Config.DEFAULT_EMBEDDER):
+    """Detects the short name of the embedder from the dataset"""
+    emb = Database.read_metadata_lightweight(db_path, Config.METADATA_KEY_EMBEDDER)
+    if emb:
+        print(f"Auto-detected embedder for {db_path}: {emb} ({SHORT_NAME_TO_CLI.get(emb, emb)})")
+        return emb
+    print(f"WARN: Could not find embedder for {db_path}, using default: {default}")
+    return default
 
 
 def build_embedder_for_name(short_name: str, device: Optional[str] = None):
@@ -247,50 +251,3 @@ def build_embedder_for_name(short_name: str, device: Optional[str] = None):
     # Fallback: default SigLIP
     from sam3_pursuit.models.embedder import SigLIPEmbedder
     return SigLIPEmbedder(device=device)
-
-
-def create_identifiers(
-    datasets: Optional[list[tuple[str, str]]] = None,
-    base_dir: str = Config.BASE_DIR,
-    **kwargs,
-) -> list["FursuitIdentifier"]:
-    """Create one FursuitIdentifier per embedder group.
-
-    If datasets is None, auto-discovers all *.db/*.index pairs in base_dir.
-    Groups datasets by stored embedder metadata and creates a separate
-    identifier with the correct embedder for each group.
-
-    Additional kwargs are passed to FursuitIdentifier (device, isolation_config, etc.).
-    The 'embedder' kwarg is overridden per group.
-    """
-    from sam3_pursuit.pipeline.processor import DEFAULT_EMBEDDER_SHORT
-
-    if datasets is None:
-        datasets = discover_datasets(base_dir)
-        if not datasets:
-            raise FileNotFoundError(
-                f"No datasets found in {base_dir}. "
-                "Expected *.db and *.index file pairs."
-            )
-        names = [Path(db).stem for db, _ in datasets]
-        print(f"Auto-discovered {len(datasets)} dataset(s): {', '.join(names)}")
-
-    # Group datasets by embedder metadata
-    groups: dict[str, list[tuple[str, str]]] = {}
-    for db_path, index_path in datasets:
-        emb = Database.read_metadata_lightweight(db_path, Config.METADATA_KEY_EMBEDDER)
-        groups.setdefault(emb or DEFAULT_EMBEDDER_SHORT, []).append((db_path, index_path))
-
-    kwargs.pop("embedder", None)  # discard: we build per-group embedders
-    identifiers = []
-    for embedder_short, group_datasets in groups.items():
-        embedder = build_embedder_for_name(embedder_short, device=kwargs.get("device"))
-        names = [Path(db).stem for db, _ in group_datasets]
-        print(f"Identifier for {embedder_short}: {', '.join(names)}")
-        ident = FursuitIdentifier(
-            datasets=group_datasets,
-            embedder=embedder,
-            **kwargs,
-        )
-        identifiers.append(ident)
-    return identifiers

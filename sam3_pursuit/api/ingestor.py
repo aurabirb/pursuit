@@ -7,10 +7,10 @@ import numpy as np
 import requests
 from PIL import Image
 
-from sam3_pursuit.api.identifier import _save_debug_crop
+from sam3_pursuit.api.identifier import _save_debug_crop, build_embedder_for_name, detect_embedder
 from sam3_pursuit.config import Config
 from sam3_pursuit.models.preprocessor import IsolationConfig
-from sam3_pursuit.pipeline.processor import CacheKey, CachedProcessingPipeline
+from sam3_pursuit.pipeline.processor import CacheKey, CachedProcessingPipeline, SHORT_NAME_TO_CLI
 from sam3_pursuit.storage.database import Database, Detection
 from sam3_pursuit.storage.mask_storage import MaskStorage
 from sam3_pursuit.storage.vector_index import VectorIndex
@@ -29,6 +29,10 @@ class FursuitIngestor:
         embedder=None,
         preprocessors: Optional[list] = None,
     ):
+        if not embedder:
+            emb = detect_embedder(db_path=db_path)
+            embedder = build_embedder_for_name(short_name = emb, device = device)
+        self.embedder = embedder
         self.db = Database(db_path)
         embedding_dim = embedder.embedding_dim if embedder else Config.EMBEDDING_DIM
         self.index = VectorIndex(index_path, embedding_dim=embedding_dim)
@@ -57,17 +61,15 @@ class FursuitIngestor:
 
     def _validate_or_store_embedder(self):
         """Validate embedder matches dataset, or store it on first use."""
-        from sam3_pursuit.pipeline.processor import SHORT_NAME_TO_CLI
         current = self.pipeline.get_embedder_short_name()
         embedder_dim = self.pipeline.embedder.embedding_dim
         stored = self.db.get_metadata(Config.METADATA_KEY_EMBEDDER)
         if stored is not None:
             if stored != current:
-                cli_name = SHORT_NAME_TO_CLI.get(stored, stored)
                 raise ValueError(
                     f"Dataset was built with embedder '{stored}', "
                     f"but current embedder is '{current}'. "
-                    f"Use --embedder {cli_name} to match."
+                    f"Use --embedder {stored} to match."
                 )
         elif self.index.size > 0 and self.index.embedding_dim != embedder_dim:
             raise ValueError(
@@ -117,8 +119,8 @@ class FursuitIngestor:
         self,
         character_names: list[str],
         image_paths: list[str],
+        source: str,
         save_crops: bool = False,
-        source: Optional[str] = None,
         uploaded_by: Optional[str] = None,
         add_full_image: bool = True,
         batch_size: int = 100,

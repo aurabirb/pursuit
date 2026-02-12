@@ -13,7 +13,8 @@ from sam3_pursuit.storage.database import (
     get_source_url,
 )
 
-from sam3_pursuit.pipeline.processor import DEFAULT_EMBEDDER_SHORT, SHORT_NAME_TO_CLI
+from sam3_pursuit.pipeline.processor import SHORT_NAME_TO_CLI
+from sam3_pursuit.api.ingestor import FursuitIngestor
 
 
 def _get_dataset_paths(dataset: str) -> tuple[str, str]:
@@ -126,7 +127,7 @@ Examples:
     parser.add_argument("--blur-radius", type=int, default=Config.DEFAULT_BLUR_RADIUS,
                         help="Blur radius for blur mode (default: 25)")
     parser.add_argument("--embedder", "-emb",
-                        choices=list(SHORT_NAME_TO_CLI.values()),
+                        choices=list(SHORT_NAME_TO_CLI.keys()),
                         default=Config.DEFAULT_EMBEDDER,
                         help=f"Embedder model (default: {Config.DEFAULT_EMBEDDER})")
     parser.add_argument("--grayscale", "-gray", action="store_true",
@@ -310,47 +311,20 @@ def _get_isolation_config(args):
 
 def _build_embedder(args):
     """Build embedder from CLI args. Returns embedder or None for default."""
-    from sam3_pursuit.api.identifier import build_embedder_for_name
-    from sam3_pursuit.pipeline.processor import CLI_TO_SHORT_NAME
-
-    embedder_name = getattr(args, "embedder", Config.DEFAULT_EMBEDDER)
-    if embedder_name == Config.DEFAULT_EMBEDDER:
-        return None  # use pipeline default
-    short_name = CLI_TO_SHORT_NAME.get(embedder_name, embedder_name)
+    from sam3_pursuit.api.identifier import build_embedder_for_name, detect_embedder
+    embedder_name =  getattr(args, "embedder") or detect_embedder(args.db)
     device = getattr(args, "device", None)
-    return build_embedder_for_name(short_name, device=device)
+    return build_embedder_for_name(embedder_name, device=device)
 
 
 def _build_preprocessors(args):
     """Build preprocessor list from CLI args."""
-    preprocessors = []
+    from typing import Callable
+    preprocessors: list[Callable[[Image.Image], Image.Image]] = []
     if getattr(args, "grayscale", False):
         from sam3_pursuit.models.preprocessor import grayscale_preprocessor
         preprocessors.append(grayscale_preprocessor)
-    return preprocessors or None
-
-
-def _auto_detect_embedder(args):
-    """If user didn't explicitly pass --embedder, check DB metadata for stored embedder.
-
-    Uses Database.read_metadata_lightweight to avoid double Database() init.
-    """
-    from sam3_pursuit.storage.database import Database
-
-    embedder_name = getattr(args, "embedder", Config.DEFAULT_EMBEDDER)
-    if embedder_name != Config.DEFAULT_EMBEDDER:
-        return  # User explicitly chose an embedder
-
-    db_path = getattr(args, "db", None)
-    if not db_path:
-        return
-
-    stored = Database.read_metadata_lightweight(db_path, Config.METADATA_KEY_EMBEDDER)
-    if stored and stored != DEFAULT_EMBEDDER_SHORT:
-        cli_name = SHORT_NAME_TO_CLI.get(stored)
-        if cli_name:
-            print(f"Auto-detected embedder from dataset: {cli_name} ({stored})")
-            args.embedder = cli_name
+    return preprocessors
 
 
 def _get_common_kwargs(args):
@@ -359,8 +333,6 @@ def _get_common_kwargs(args):
     segmentor_model_name = Config.SAM3_MODEL if getattr(args, "segment", True) else None
     device = getattr(args, "device")
     segmentor_concept = args.concept if hasattr(args, "concept") and args.concept else Config.DEFAULT_CONCEPT
-    _auto_detect_embedder(args)
-    print(f"Using embedder: {getattr(args, 'embedder', Config.DEFAULT_EMBEDDER)}")
     embedder = _build_embedder(args)
     preprocessors = _build_preprocessors(args)
     return dict(
@@ -376,8 +348,7 @@ def _get_common_kwargs(args):
 def _get_identifier(args):
     from sam3_pursuit.api.identifier import FursuitIdentifier
     kwargs = _get_common_kwargs(args)
-    datasets = [(args.db, args.index)]
-    return FursuitIdentifier(datasets=datasets, **kwargs)
+    return FursuitIdentifier(db_path=args.db, index_path=args.index, **kwargs)
 
 
 def _get_ingestor(args):
@@ -472,24 +443,15 @@ def identify_command(args):
 
 def search_command(args):
     """Handle search command - text-based search (lightweight, no SAM3 needed)."""
-    from sam3_pursuit.storage.database import Database
+    from sam3_pursuit.models.embedder import CLIPEmbedder, SigLIPEmbedder
 
-    _auto_detect_embedder(args)
     embedder = _build_embedder(args)
-
-    # Check embedder supports text search
-    if embedder is None:
-        # Default embedder (DINOv2) - no text support
-        stored = Database.read_metadata_lightweight(args.db, Config.METADATA_KEY_EMBEDDER)
-        embedder_name = stored or DEFAULT_EMBEDDER_SHORT
-        cli_name = SHORT_NAME_TO_CLI.get(embedder_name, embedder_name)
-        print(f"Error: Text search requires a CLIP or SigLIP embedder. This dataset uses {cli_name}.")
-        sys.exit(1)
 
     if not hasattr(embedder, "embed_text"):
         print(f"Error: Text search requires a CLIP or SigLIP embedder. The '{args.embedder}' embedder does not support text search.")
         sys.exit(1)
-
+    assert isinstance(embedder, CLIPEmbedder) or isinstance(embedder, SigLIPEmbedder)
+    
     if not _dataset_has_db(args.dataset):
         print(f"Error: Dataset '{args.dataset}' not found.")
         sys.exit(1)
@@ -583,8 +545,8 @@ def add_command(args):
     added = ingestor.add_images(
         character_names=[args.character] * len(valid_paths),
         image_paths=valid_paths,
-        save_crops=args.save_crops,
         source=args.source,
+        save_crops=args.save_crops,
         add_full_image=add_full_image,
         skip_non_fursuit=args.skip_non_fursuit,
         classify_threshold=args.threshold,
@@ -848,8 +810,8 @@ def ingest_from_directory(args):
     added = ingestor.add_images(
         character_names=list(names),
         image_paths=[str(p) for p in images],
-        save_crops=args.save_crops,
         source=source,
+        save_crops=args.save_crops,
         add_full_image=add_full_image,
         skip_non_fursuit=args.skip_non_fursuit,
         classify_threshold=args.threshold,
@@ -894,8 +856,8 @@ def ingest_from_nfc25(args):
     added = ingestor.add_images(
         character_names=char_names,
         image_paths=img_paths,
-        save_crops=args.save_crops,
         source=SOURCE_NFC25,
+        save_crops=args.save_crops,
         add_full_image=add_full_image,
         skip_non_fursuit=args.skip_non_fursuit,
         classify_threshold=args.threshold,
@@ -974,8 +936,8 @@ def ingest_from_barq(args):
     added = ingestor.add_images(
         character_names=list(names),
         image_paths=[str(p) for p in images],
-        save_crops=args.save_crops,
         source=SOURCE_BARQ,
+        save_crops=args.save_crops,
         add_full_image=add_full_image,
         skip_non_fursuit=args.skip_non_fursuit,
         classify_threshold=args.threshold,

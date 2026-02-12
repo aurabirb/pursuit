@@ -303,7 +303,14 @@ class Database:
         return [row[0] for row in c.fetchall()]
 
     @retry_on_locked()
-    def get_stats(self) -> dict:
+    def get_all_post_ids(self) -> list[str]:
+        conn = self._connect()
+        c = conn.cursor()
+        c.execute("SELECT DISTINCT post_id FROM detections")
+        return [row[0] for row in c.fetchall()]
+
+    @retry_on_locked()
+    def get_stats(self):
         conn = self._connect()
         c = conn.cursor()
 

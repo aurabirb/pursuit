@@ -8,11 +8,10 @@ from sam3_pursuit.api.identifier import (
     FursuitIdentifier,
     IdentificationResult,
     SegmentResults,
-    create_identifiers,
 )
 from sam3_pursuit.api.ingestor import FursuitIngestor
 from sam3_pursuit.config import Config
 from sam3_pursuit.pipeline.processor import ProcessingResult
 
 __version__ = "1.0.0"
-__all__ = ["FursuitIdentifier", "FursuitIngestor", "IdentificationResult", "SegmentResults", "ProcessingResult", "Config", "create_identifiers"]
+__all__ = ["FursuitIdentifier", "FursuitIngestor", "IdentificationResult", "SegmentResults", "ProcessingResult", "Config"]

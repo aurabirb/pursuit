@@ -250,26 +250,25 @@ python tgbot.py
 ## Python API
 
 ```python
-from sam3_pursuit import FursuitIdentifier, FursuitIngestor, create_identifiers
+from sam3_pursuit import FursuitIdentifier, FursuitIngestor, Config
+from sam3_pursuit.api.identifier import discover_datasets
 from sam3_pursuit.models.preprocessor import IsolationConfig
-from sam3_pursuit.config import Config
 from PIL import Image
 
-# --- Identification (read-only, supports multiple datasets) ---
+# --- Identification (read-only, one identifier per dataset) ---
 
-# Single dataset (datasets is required)
+# Single dataset (embedder is auto-detected from DB metadata)
 identifier = FursuitIdentifier(
-    datasets=[(Config.DB_PATH, Config.INDEX_PATH)],
+    db_path=Config.DB_PATH,
+    index_path=Config.INDEX_PATH,
 )
 
-# Multiple datasets with same embedder (searches all, merges results)
-identifier = FursuitIdentifier(
-    datasets=[("pursuit.db", "pursuit.index"), ("validation.db", "validation.index")],
-)
-
-# Auto-discover datasets and group by embedder (one identifier per embedder)
-# This is the recommended way when datasets may use different embedders.
-identifiers = create_identifiers()  # discovers *.db/*.index in Config.BASE_DIR
+# Multiple datasets: create one identifier per dataset
+datasets = discover_datasets()  # discovers *.db/*.index pairs in Config.BASE_DIR
+identifiers = [
+    FursuitIdentifier(db_path=db, index_path=idx)
+    for db, idx in datasets
+]
 
 # Identify across all identifiers (segmentation is cached after the first)
 image = Image.open("photo.jpg")
@@ -295,9 +294,12 @@ for ident in text_identifiers:
     for match in results:
         print(f"  {match.character_name}: {match.confidence:.1%}")
 
-# Get statistics (aggregated across all datasets in an identifier)
+# Get statistics
 stats = identifier.get_stats()
 print(f"Database contains {stats['unique_characters']} characters")
+
+# Combined stats across multiple identifiers
+combined = FursuitIdentifier.get_combined_stats([i.get_stats() for i in identifiers])
 
 # --- Ingestion (writes to a single dataset) ---
 
@@ -424,7 +426,7 @@ pursuit/
 ├── sam3_pursuit/           # Main package
 │   ├── api/
 │   │   ├── cli.py          # Command-line interface
-│   │   ├── identifier.py   # FursuitIdentifier (read-only, multi-dataset search), create_identifiers (multi-embedder factory)
+│   │   ├── identifier.py   # FursuitIdentifier (read-only, single-dataset search), detect_embedder, build_embedder_for_name
 │   │   └── ingestor.py     # FursuitIngestor (ingestion, single dataset)
 │   ├── models/
 │   │   ├── segmentor.py    # SAM3 segmentation (SAM3FursuitSegmentor, FullImageSegmentor)

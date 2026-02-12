@@ -25,28 +25,44 @@ import webserver
 
 load_dotenv()
 
-from sam3_pursuit import FursuitIdentifier, FursuitIngestor, Config, create_identifiers
+from sam3_pursuit import FursuitIdentifier, FursuitIngestor, Config
+from sam3_pursuit.api.identifier import discover_datasets
 from sam3_pursuit.api.annotator import annotate_image
 from telegram import InputMediaPhoto
 
-from sam3_pursuit.storage.database import SOURCE_TGBOT, get_git_version, get_source_url, get_source_image_url
+from sam3_pursuit.storage.database import Database, SOURCE_TGBOT, get_git_version, get_source_url, get_source_image_url
+from typing import Optional
 
 # Pattern to match "character:Name" in caption
 CHARACTER_PATTERN = re.compile(r"character:(\S+)", re.IGNORECASE)
 
 # Global instances (lazy loaded)
-_identifiers = None
-_ingestor = None
+_identifiers: Optional[list[FursuitIdentifier]] = None
+_ingestor: Optional[FursuitIngestor] = None
 
 
-def get_identifiers() -> list[FursuitIdentifier]:
-    """Get or create identifier instances (one per embedder group)."""
+def get_identifiers():
     global _identifiers
-    if _identifiers is None:
-        _identifiers = create_identifiers(
+    if _identifiers:
+        return _identifiers
+    base_dir = Config.BASE_DIR
+    datasets = discover_datasets(base_dir)
+    if not datasets:
+        raise FileNotFoundError(
+            f"No datasets found in {base_dir}. "
+            "Expected *.db and *.index file pairs."
+        )
+    names = [db_path for db_path, _ in datasets]
+    print(f"Auto-discovered {len(datasets)} dataset(s): {', '.join(names)}")
+    _identifiers = [
+        FursuitIdentifier(
+            db_path=db_path,
+            index_path=index_path,
             segmentor_model_name=Config.SAM3_MODEL,
             segmentor_concept=Config.DEFAULT_CONCEPT,
         )
+        for db_path, index_path in datasets
+    ]
     return _identifiers
 
 
@@ -114,8 +130,8 @@ async def add_photo(update: Update, context: ContextTypes.DEFAULT_TYPE, characte
         # Rename temp file to use post_id so identifier extracts it correctly
         post_id_path = temp_path.parent / f"{post_id}.jpg"
         temp_path.rename(post_id_path)
-        identifier = get_ingestor()
-        added = identifier.add_images(
+        ingestor = get_ingestor()
+        added = ingestor.add_images(
             character_names=[character_name],
             image_paths=[str(post_id_path)],
             source=SOURCE_TGBOT,
@@ -303,12 +319,11 @@ async def show(update: Update, context: ContextTypes.DEFAULT_TYPE):
     try:
         identifiers = get_identifiers()
         # Collect character names from all databases across all identifiers
-        all_names = set()
-        all_dbs = []
+        all_names: set[str] = set()
+        all_dbs: list[Database] = []
         for ident in identifiers:
-            for db, _ in ident.stores:
-                all_dbs.append(db)
-                all_names.update(db.get_all_character_names())
+            all_dbs.append(ident.db)
+            all_names.update(ident.db.get_all_character_names())
 
         # Try exact match first (case-insensitive)
         name_lower = {n.lower(): n for n in all_names}
@@ -428,6 +443,7 @@ async def search(update: Update, context: ContextTypes.DEFAULT_TYPE):
             if name not in seen or r.confidence > seen[name].confidence:
                 seen[name] = r
         top_matches = sorted(seen.values(), key=lambda x: x.confidence, reverse=True)[:5]
+        print(f'Found top matches: {top_matches}')
 
         lines = [f"Search results for '<b>{html.escape(query)}</b>':"]
         for i, m in enumerate(top_matches, 1):
@@ -442,8 +458,7 @@ async def search(update: Update, context: ContextTypes.DEFAULT_TYPE):
         top_name = top_matches[0].character_name
         detections = []
         for ident in identifiers:
-            for db, _ in ident.stores:
-                detections.extend(db.get_detections_by_character(top_name))
+            detections.extend(ident.db.get_detections_by_character(top_name))
         seen_posts = set()
         media = []
         for det in detections:
@@ -484,31 +499,18 @@ async def stats(update: Update, context: ContextTypes.DEFAULT_TYPE):
     """Handle /stats command."""
     try:
         identifiers = get_identifiers()
-        # Aggregate stats across all identifiers
-        total_detections = 0
         all_characters = set()
         all_posts = set()
-        total_index_size = 0
-        num_datasets = 0
+        stats_list = [ident.get_stats() for ident in identifiers]
+        combined_stats = FursuitIdentifier.get_combined_stats(stats_list)
         for ident in identifiers:
-            s = ident.get_stats()
-            total_detections += s["total_detections"]
-            total_index_size += s["index_size"]
-            num_datasets += s.get("num_datasets", 1)
             # Collect character names and post IDs from each db
-            for db, _ in ident.stores:
-                all_characters.update(db.get_all_character_names())
-                conn = db._connect()
-                cursor = conn.cursor()
-                cursor.execute("SELECT DISTINCT post_id FROM detections")
-                all_posts.update(row[0] for row in cursor.fetchall())
+            all_characters.update(ident.db.get_all_character_names())
+            all_posts.update(ident.db.get_all_post_ids())
         combined_stats = {
-            "total_detections": total_detections,
+            **combined_stats,
             "unique_characters": len(all_characters),
             "unique_posts": len(all_posts),
-            "index_size": total_index_size,
-            "num_datasets": num_datasets,
-            "num_embedder_groups": len(identifiers),
         }
         import yaml
         msg = yaml.safe_dump(combined_stats)

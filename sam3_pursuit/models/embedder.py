@@ -53,7 +53,8 @@ class CLIPEmbedder:
     def embed_text(self, text: str) -> np.ndarray:
         inputs = self.processor(text=[text], return_tensors="pt", padding=True).to(self.device)
         with torch.no_grad():
-            features = self.model.get_text_features(**inputs)
+            output = self.model.get_text_features(**inputs)
+            features = output.pooler_output if hasattr(output, "pooler_output") else output
             features = features / features.norm(dim=-1, keepdim=True)
         return features.cpu().numpy().flatten().astype(np.float32)
 
@@ -85,7 +86,9 @@ class SigLIPEmbedder:
         tokenizer = self._get_tokenizer()
         inputs = tokenizer([text], return_tensors="pt", padding=True).to(self.device)
         with torch.no_grad():
-            features = self.model.get_text_features(**inputs)
+            output = self.model.get_text_features(**inputs)
+            # Newer transformers returns BaseModelOutputWithPooling
+            features = output.pooler_output if hasattr(output, "pooler_output") else output
             features = features / features.norm(dim=-1, keepdim=True)
         return features.cpu().numpy().flatten().astype(np.float32)
 

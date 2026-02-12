@@ -171,7 +171,7 @@ async def identify_and_send(context: ContextTypes.DEFAULT_TYPE, chat_id: int,
 
     identifiers = get_identifiers()
     # Run identify on all identifiers; segmentation masks are cached after the first.
-    all_results = [ident.identify(image, top_k=5) for ident in identifiers]
+    all_results = [ident.identify(image, top_k=Config.DEFAULT_TOP_K) for ident in identifiers]
 
     # Merge results: combine matches per segment across identifiers
     results = all_results[0] if all_results else []
@@ -179,7 +179,7 @@ async def identify_and_send(context: ContextTypes.DEFAULT_TYPE, chat_id: int,
         for seg, other_seg in zip(results, other):
             seg.matches.extend(other_seg.matches)
             seg.matches.sort(key=lambda x: x.confidence, reverse=True)
-            seg.matches = seg.matches[:5]
+            seg.matches = seg.matches[:Config.DEFAULT_TOP_K]
 
     reply_kwargs = {"chat_id": chat_id}
     if reply_to_message_id:
@@ -335,7 +335,7 @@ async def show(update: Update, context: ContextTypes.DEFAULT_TYPE):
             # Fuzzy match using difflib
             from difflib import get_close_matches
             # Match against lowercased names, map back to originals
-            close = get_close_matches(query.lower(), name_lower.keys(), n=5, cutoff=0.5)
+            close = get_close_matches(query.lower(), name_lower.keys(), n=Config.DEFAULT_TOP_K, cutoff=0.5)
             matched_names = [name_lower[c] for c in close]
 
         if not matched_names:

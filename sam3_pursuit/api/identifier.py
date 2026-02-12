@@ -184,7 +184,13 @@ class FursuitIdentifier:
             print("Warning: All indexes are empty, no matches possible")
             return []
         embedding = embedder.embed_text(text)
-        return self._search_embedding(embedding, top_k)
+        results = self._search_embedding(embedding, top_k)
+        # Use embedder-native confidence if available (e.g. SigLIP sigmoid scaling)
+        if hasattr(embedder, "text_confidence"):
+            for r in results:
+                r.confidence = embedder.text_confidence(r.distance)
+            results.sort(key=lambda x: x.confidence, reverse=True)
+        return results
 
     def get_stats(self) -> dict:
         stats = self.db.get_stats()

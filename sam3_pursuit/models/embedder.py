@@ -53,9 +53,10 @@ class CLIPEmbedder:
     def embed_text(self, text: str) -> np.ndarray:
         inputs = self.processor(text=[text], return_tensors="pt", padding=True).to(self.device)
         with torch.no_grad():
-            output = self.model.get_text_features(**inputs)
-            features = output.pooler_output if hasattr(output, "pooler_output") else output
-            features = features / features.norm(dim=-1, keepdim=True)
+            text_outputs = self.model.text_model(**inputs)
+            pooled = text_outputs.pooler_output
+            projected = self.model.text_projection(pooled)
+            features = projected / projected.norm(dim=-1, keepdim=True)
         return features.cpu().numpy().flatten().astype(np.float32)
 
 class SigLIPEmbedder:
@@ -84,13 +85,32 @@ class SigLIPEmbedder:
 
     def embed_text(self, text: str) -> np.ndarray:
         tokenizer = self._get_tokenizer()
-        inputs = tokenizer([text], return_tensors="pt", padding=True).to(self.device)
+        # SigLIP was trained with padding="max_length" (64 tokens) — using
+        # shorter padding produces embeddings in a different region of the space.
+        inputs = tokenizer([text], return_tensors="pt", padding="max_length").to(self.device)
         with torch.no_grad():
-            output = self.model.get_text_features(**inputs)
-            # Newer transformers returns BaseModelOutputWithPooling
-            features = output.pooler_output if hasattr(output, "pooler_output") else output
+            output = self.model.text_model(**inputs)
+            features = output.pooler_output
             features = features / features.norm(dim=-1, keepdim=True)
         return features.cpu().numpy().flatten().astype(np.float32)
+
+    def text_confidence(self, distance: float) -> float:
+        """Convert FAISS squared-L2 distance to SigLIP-native sigmoid confidence.
+
+        FAISS IndexFlatL2 returns squared L2 distances. For unit vectors:
+            cos_sim = 1 - squared_l2 / 2
+
+        SigLIP text-image cosine similarities are inherently small and use
+        learned logit_scale/logit_bias to produce meaningful scores:
+            logit = logit_scale * cos_sim + logit_bias
+            confidence = sigmoid(logit)
+        """
+        import math
+        cos_sim = 1.0 - distance / 2.0  # distance is already squared L2
+        logit_scale = self.model.logit_scale.exp().item()
+        logit_bias = self.model.logit_bias.item()
+        logit = logit_scale * cos_sim + logit_bias
+        return 1.0 / (1.0 + math.exp(-max(-50.0, min(50.0, logit))))
 
 
 class ColorHistogramEmbedder:

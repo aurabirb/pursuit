@@ -465,7 +465,9 @@ def search_command(args):
     # Embed text query and search
     embedding = embedder.embed_text(args.query)
     top_k = args.top_k
-    min_confidence = args.min_confidence
+    # Text-image similarity scores are much lower than image-image scores,
+    # so skip the min_confidence filter for text search (ranking is meaningful).
+    min_confidence = 0.0
 
     distances, indices = index.search(embedding, top_k * 3)
 
@@ -477,7 +479,10 @@ def search_command(args):
         detection = db.get_detection_by_embedding_id(int(idx))
         if detection is None:
             continue
-        confidence = max(0.0, 1.0 - distance / 2.0)
+        if hasattr(embedder, "text_confidence"):
+            confidence = embedder.text_confidence(float(distance))
+        else:
+            confidence = max(0.0, 1.0 - distance / 2.0)
         if confidence < min_confidence:
             continue
         char_name = detection.character_name or "unknown"

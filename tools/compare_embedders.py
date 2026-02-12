@@ -21,6 +21,9 @@ Usage:
 
     # Only compare specific datasets
     python tools/compare_embedders.py --image img.jpg --datasets dino,furtrack
+
+    # Exclude nfc25-sourced images from results (avoid training/validation overlap)
+    python tools/compare_embedders.py --ground-truth tests/ground_truth_nfc25.csv --exclude nfc25
 """
 
 import argparse
@@ -105,6 +108,8 @@ def parse_args():
     parser.add_argument("--output", "-o", type=str, default="tools/embedder_comparison_results.txt",
                         help="Output file path")
     parser.add_argument("--datasets", type=str, help="Comma-separated list of dataset names to compare (default: all)")
+    parser.add_argument("--exclude", "-e", type=str,
+                        help="Comma-separated list of sources to exclude from results (e.g. nfc25,manual)")
     parser.add_argument("--device", type=str, help="Device override (cuda, cpu, mps)")
     parser.add_argument("--aliases", type=str, default="tests/character_aliases.csv",
                         help="Character alias CSV file (default: tests/character_aliases.csv)")
@@ -449,6 +454,16 @@ def format_summary(
     return "\n".join(lines)
 
 
+def filter_excluded_sources(
+    segment_results: list[SegmentResults],
+    exclude_sources: set[str],
+) -> list[SegmentResults]:
+    """Remove matches whose source is in the exclusion set."""
+    for seg in segment_results:
+        seg.matches = [m for m in seg.matches if m.source not in exclude_sources]
+    return segment_results
+
+
 def free_gpu_memory():
     """Release GPU memory between dataset loads."""
     gc.collect()
@@ -463,8 +478,14 @@ def free_gpu_memory():
 def main():
     args = parse_args()
 
+    exclude_sources: set[str] = set()
+    if args.exclude:
+        exclude_sources = {s.strip() for s in args.exclude.split(",")}
+
     test_images = load_test_images(args)
     print(f"\nLoaded {len(test_images)} test image(s)")
+    if exclude_sources:
+        print(f"Excluding sources: {', '.join(sorted(exclude_sources))}")
 
     # Load character aliases
     alias_path = Config.get_absolute_path(args.aliases) if args.aliases else None
@@ -482,6 +503,8 @@ def main():
     output_lines.append(f"Date: {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}")
     output_lines.append(f"Test images: {len(test_images)}")
     output_lines.append(f"Datasets: {', '.join(ds_names)}")
+    if exclude_sources:
+        output_lines.append(f"Excluded sources: {', '.join(sorted(exclude_sources))}")
     output_lines.append("")
 
     # Dataset overview (lightweight, no model loading)
@@ -537,7 +560,15 @@ def main():
                 continue
             print(f"  [{img_idx + 1}/{len(loaded_images)}] {Path(img_path).name} -> {name}")
             try:
-                segment_results = ident.identify(image, top_k=args.top_k)
+                # Request extra results when excluding sources, so we still
+                # have enough matches after filtering.
+                fetch_k = args.top_k * 3 if exclude_sources else args.top_k
+                segment_results = ident.identify(image, top_k=fetch_k)
+                if exclude_sources:
+                    filter_excluded_sources(segment_results, exclude_sources)
+                    # Trim back to requested top_k
+                    for seg in segment_results:
+                        seg.matches = seg.matches[:args.top_k]
             except Exception as e:
                 text = f"  Dataset: {name} ({emb_name}, {total_entries:,} entries)\n    ERROR: {e}"
                 image_results[img_idx][name] = (text, [], None)

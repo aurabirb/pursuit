@@ -25,20 +25,12 @@ from pathlib import Path
 import numpy as np
 
 from sam3_pursuit.config import Config
-from sam3_pursuit.storage.database import Database
+from sam3_pursuit.api.cli import _open_dataset, _get_dataset_paths
+from sam3_pursuit.storage.database import Database, Detection
 from sam3_pursuit.storage.vector_index import VectorIndex
 
 
-def relabel(db_path: str, index_path: str, output_db_path: str, top_k: int, apply: bool):
-    # Load index (read-only, shared)
-    db = Database(db_path)
-    index = VectorIndex(index_path, embedding_dim=Config.EMBEDDING_DIM)
-
-    total = index.size
-    if total == 0:
-        print("Index is empty, nothing to relabel.")
-        return
-
+def load_dataset(db_path: str):
     # Load all detections
     conn = sqlite3.connect(db_path)
     rows = conn.execute(
@@ -46,6 +38,18 @@ def relabel(db_path: str, index_path: str, output_db_path: str, top_k: int, appl
     ).fetchall()
     conn.close()
     print(f"Loaded {len(rows)} detections from {db_path}")
+    return rows
+
+
+def relabel(dataset: str, output_db_path: str, top_k: int, apply: bool):
+    db, index = _open_dataset(dataset)
+    total = index.size
+    if total == 0:
+        print("Index is empty, nothing to relabel.")
+        return
+
+    db_path = db.db_path
+    rows = load_dataset(db_path)
 
     # Build embedding_id -> character_name lookup for exclusion
     emb_id_to_char: dict[int, str] = {}
@@ -130,28 +134,63 @@ def relabel(db_path: str, index_path: str, output_db_path: str, top_k: int, appl
     print(f"\nWrote relabeled database to {output_db_path}")
 
 
+def save_average(dataset: str, out_dataset: str, apply: bool):
+    db, index = _open_dataset(dataset)
+    out_db_path, out_db_index = _get_dataset_paths(out_dataset)
+    out_index = VectorIndex(out_db_index)
+    out_index.reset()
+    out_db = Database(out_db_path)
+
+    char_names = db.get_all_character_names()
+    avg_dets = []
+    for i, char in enumerate(char_names):
+        if i % 500 == 0 and i > 0:
+            print(f"  {i}/{len(char_names)}...")
+        dets = db.get_detections_by_character(char)
+        bx, by, bh, bw = 0,0,0,0
+        conf = 0
+        embs = []
+        for det in dets:
+            bx, by, bh, bw = bx + det.bbox_x, by + det.bbox_y, bh + det.bbox_height, bw + det.bbox_width
+            embs.append(index.reconstruct(det.embedding_id).reshape(1, -1).astype(np.float32))
+            conf += det.confidence
+        avgemb = np.stack(embs).mean(axis=0, keepdims=True).astype(np.float32)
+        avgconf = conf / len(dets)
+        bx, by, bh, bw = [t // len(dets) for t in [bx, by, bh, bw]]
+        char_name = (char or "").lower()
+
+        out_index.add(avgemb)
+        avg_dets.append(Detection(None, str(i), char_name, i, bx, by, bw, bh, avgconf))
+
+    if not apply:
+        print(f"\nDry run complete. Use --apply to write {out_db_path}")
+        return
+
+    out_db.add_detections_batch(avg_dets)
+    out_db.close()
+    out_index.save()
+    print(out_db.get_stats())
+    print(f"\nWrote relabeled database to {out_db_path}")
+
+
 def main():
     parser = argparse.ArgumentParser(description="Relabel dataset using avg_embedding identification")
     parser.add_argument("--dataset", "-d", default="pursuit", help="Source dataset name")
     parser.add_argument("--output", "-o", default=None, help="Output dataset name (default: {dataset}_relabeled)")
     parser.add_argument("--top-k", type=int, default=5, help="Top-k neighbors per character for averaging")
+    parser.add_argument("--average", action="store_true", help="Squeeze all embeddings for characters into one")
     parser.add_argument("--apply", action="store_true", help="Actually write changes (default: dry run)")
     args = parser.parse_args()
 
     base = Path(Config.BASE_DIR)
-    db_path = str(base / f"{args.dataset}.db")
-    index_path = str(base / f"{args.dataset}.index")
     output_name = args.output or f"{args.dataset}_relabeled"
     output_db_path = str(base / f"{output_name}.db")
 
-    if not Path(db_path).exists():
-        print(f"Database not found: {db_path}")
-        sys.exit(1)
-    if not Path(index_path).exists():
-        print(f"Index not found: {index_path}")
-        sys.exit(1)
+    if args.average:
+        save_average(args.dataset, output_name, args.apply)
+        return
 
-    relabel(db_path, index_path, output_db_path, args.top_k, args.apply)
+    relabel(args.dataset, output_db_path, args.top_k, args.apply)
 
 
 if __name__ == "__main__":

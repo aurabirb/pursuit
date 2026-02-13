@@ -273,7 +273,7 @@ class FursuitIdentifier:
             "git_version_breakdown": {},
             "source_breakdown": {},
             "index_size": 0,
-            "num_datasets": len(stats_list),
+            "num_datasets": 0,
         }
         for k, v in ret.items():
             if isinstance(v, dict):
@@ -289,6 +289,7 @@ class FursuitIdentifier:
                 ret[k] = sum([stats.get(k, 0) for stats in stats_list])
         # Convert top_characters back to sorted top-10 list
         top = ret["top_characters"]
+        ret["num_datasets"] = len(stats_list)
         ret["top_characters"] = sorted(top.items(), key=lambda x: x[1], reverse=True)[:10]
         return ret
 

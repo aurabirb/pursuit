@@ -267,7 +267,7 @@ class FursuitIdentifier:
             "total_detections": 0,
             "unique_characters": 0,
             "unique_posts": 0,
-            "top_characters": 0,
+            "top_characters": {},
             "segmentor_breakdown": {},
             "preprocessing_breakdown": {},
             "git_version_breakdown": {},
@@ -279,10 +279,17 @@ class FursuitIdentifier:
             if isinstance(v, dict):
                 cnt = Counter(v)
                 for stats in stats_list:
-                    cnt.update(stats.get(k, {}))
+                    val = stats.get(k, {})
+                    # top_characters comes from DB as list of tuples, convert to dict
+                    if isinstance(val, list):
+                        val = dict(val)
+                    cnt.update(val)
                 ret[k] = dict(cnt)
             else:
                 ret[k] = sum([stats.get(k, 0) for stats in stats_list])
+        # Convert top_characters back to sorted top-10 list
+        top = ret["top_characters"]
+        ret["top_characters"] = sorted(top.items(), key=lambda x: x[1], reverse=True)[:10]
         return ret
 
 

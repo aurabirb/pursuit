@@ -508,8 +508,8 @@ async def stats(update: Update, context: ContextTypes.DEFAULT_TYPE):
             "unique_characters": len(all_characters),
             "unique_posts": len(all_posts),
         }
-        import yaml
-        msg = yaml.safe_dump(combined_stats)
+        import json
+        msg = json.dumps(combined_stats, indent=2, ensure_ascii=False, default=str)
         await context.bot.send_message(chat_id=update.effective_chat.id, text=msg)
 
     except Exception as e:

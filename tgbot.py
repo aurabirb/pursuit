@@ -258,7 +258,8 @@ async def add_photo(update: Update, context: ContextTypes.DEFAULT_TYPE, characte
         post_id_path = temp_path.parent / f"{post_id}.jpg"
         temp_path.rename(post_id_path)
         ingestor = get_ingestor()
-        added = ingestor.add_images(
+        added = await asyncio.to_thread(
+            ingestor.add_images,
             character_names=[character_name],
             image_paths=[str(post_id_path)],
             source=SOURCE_TGBOT,
@@ -298,11 +299,12 @@ async def identify_and_send(context: ContextTypes.DEFAULT_TYPE, chat_id: int,
     image = Image.open(temp_path)
 
     identifiers = get_identifiers()
-    # Run identify on all identifiers; segmentation masks are cached after the first.
-    all_results = [ident.identify(image, top_k=Config.DEFAULT_TOP_K) for ident in identifiers]
 
-    # Merge results across datasets using reciprocal rank fusion
-    results = merge_multi_dataset_results(all_results, top_k=Config.DEFAULT_TOP_K)
+    def _run_identify():
+        all_results = [ident.identify(image, top_k=Config.DEFAULT_TOP_K) for ident in identifiers]
+        return merge_multi_dataset_results(all_results, top_k=Config.DEFAULT_TOP_K)
+
+    results = await asyncio.to_thread(_run_identify)
 
     reply_kwargs = {"chat_id": chat_id}
     if reply_to_message_id:
@@ -321,18 +323,19 @@ async def identify_and_send(context: ContextTypes.DEFAULT_TYPE, chat_id: int,
         lines.append(f"Segment {i}:")
         for n, m in enumerate(filtered):
             url = _get_page_url(m.source, m.post_id)
+            img_url = get_source_image_url(m.source, m.post_id)
             name = html.escape(m.character_name or 'Unknown')
-            if url:
-                lines.append(f"  {n+1}. <a href=\"{url}\">{name}</a> ({m.confidence*100:.1f}%)")
-            else:
-                lines.append(f"  {n+1}. {name} ({m.confidence*100:.1f}%)")
+            pct = f"{m.confidence*100:.1f}%"
+            name_part = f"<a href=\"{url}\">{name}</a>" if url else name
+            pct_part = f"<a href=\"{img_url}\">{pct}</a>" if img_url else pct
+            lines.append(f"  {n+1}. {name_part} ({pct_part})")
 
     if not lines:
         await context.bot.send_message(**reply_kwargs, text=f"No matches above {min_confidence:.0%} confidence.")
         return
 
     watermark_text = f"Pursuit {get_git_version()}"
-    annotated = annotate_image(image, results, min_confidence, watermark_text)
+    annotated = await asyncio.to_thread(annotate_image, image, results, min_confidence, watermark_text)
     with NamedTemporaryFile(suffix=".jpg", delete=False) as f:
         annotated.save(f, format="JPEG", quality=90)
         temp_annotated_path = f.name
@@ -614,9 +617,12 @@ async def search(update: Update, context: ContextTypes.DEFAULT_TYPE):
             return
 
         # Merge text search results from all text-capable identifiers
-        all_results = []
-        for ident in text_identifiers:
-            all_results.extend(ident.search_text(query, top_k=10))
+        def _run_search():
+            results = []
+            for ident in text_identifiers:
+                results.extend(ident.search_text(query, top_k=10))
+            return results
+        all_results = await asyncio.to_thread(_run_search)
 
         if not all_results:
             await context.bot.send_message(
@@ -759,7 +765,7 @@ async def debug_all_messages(update: Update, context: ContextTypes.DEFAULT_TYPE)
 
 def build_application(token: str):
     """Create a Telegram application with all handlers."""
-    app = ApplicationBuilder().token(token).build()
+    app = ApplicationBuilder().token(token).concurrent_updates(True).build()
     # Debug handler - logs all messages (group=-1 runs before other handlers)
     app.add_handler(MessageHandler(filters.ALL, debug_all_messages), group=-1)
     app.add_handler(MessageHandler((~filters.COMMAND) & filters.PHOTO, photo))

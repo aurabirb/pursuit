@@ -3,6 +3,7 @@
 import asyncio
 import html
 import os
+import random
 import re
 import sys
 import traceback
@@ -370,8 +371,6 @@ async def show(update: Update, context: ContextTypes.DEFAULT_TYPE):
             if page_url:
                 caption = f"<a href=\"{page_url}\">{safe_name}</a> ({safe_source})"
             media.append(InputMediaPhoto(media=url, caption=caption, parse_mode="HTML"))
-            if len(media) >= Config.MAX_EXAMPLES:
-                break
 
         if not media:
             names_list = ", ".join(matched_names)
@@ -381,27 +380,35 @@ async def show(update: Update, context: ContextTypes.DEFAULT_TYPE):
             )
             return
 
-        # Telegram requires at least 2 items for media groups
-        if len(media) == 1:
-            await context.bot.send_photo(
-                chat_id=update.effective_chat.id,
-                photo=media[0].media,
-                caption=media[0].caption,
-                parse_mode=media[0].parse_mode,
-            )
-        else:
-            # Telegram allows max 10 media per group, send in batches
-            for i in range(0, len(media), 10):
+        # Pick up to 5 random photos
+        if len(media) > 5:
+            media = random.sample(media, 5)
+
+        # Try media group first, fall back to individual photos
+        try:
+            if len(media) >= 2:
                 await context.bot.send_media_group(
+                    chat_id=update.effective_chat.id, media=media)
+            else:
+                await context.bot.send_photo(
                     chat_id=update.effective_chat.id,
-                    media=media[i:i+10],
-                )
+                    photo=media[0].media, caption=media[0].caption,
+                    parse_mode=media[0].parse_mode)
+        except Exception:
+            for item in media:
+                try:
+                    await context.bot.send_photo(
+                        chat_id=update.effective_chat.id,
+                        photo=item.media, caption=item.caption,
+                        parse_mode=item.parse_mode)
+                except Exception:
+                    continue
 
     except Exception as e:
         traceback.print_exc()
         await context.bot.send_message(
             chat_id=update.effective_chat.id,
-            text="Error looking up character. Please try again."
+            text=f"Error looking up character: {e}"
         )
 
 
@@ -480,31 +487,41 @@ async def search(update: Update, context: ContextTypes.DEFAULT_TYPE):
             if page_url:
                 caption = f"<a href=\"{page_url}\">{safe_name}</a> ({safe_source})"
             media.append(InputMediaPhoto(media=img_url, caption=caption, parse_mode="HTML"))
-            if len(media) >= Config.MAX_EXAMPLES:
-                break
 
         msg = "\n".join(lines)
         await context.bot.send_message(
             chat_id=update.effective_chat.id, text=msg, parse_mode="HTML",
             disable_web_page_preview=True)
 
+        # Pick up to 5 random photos
+        if len(media) > 5:
+            media = random.sample(media, 5)
+
+        # Try media group first, fall back to individual photos
         if media:
-            if len(media) == 1:
-                await context.bot.send_photo(
-                    chat_id=update.effective_chat.id,
-                    photo=media[0].media,
-                    caption=media[0].caption,
-                    parse_mode=media[0].parse_mode,
-                )
-            else:
-                for i in range(0, len(media), 10):
+            try:
+                if len(media) >= 2:
                     await context.bot.send_media_group(
-                        chat_id=update.effective_chat.id, media=media[i:i+10])
+                        chat_id=update.effective_chat.id, media=media)
+                else:
+                    await context.bot.send_photo(
+                        chat_id=update.effective_chat.id,
+                        photo=media[0].media, caption=media[0].caption,
+                        parse_mode=media[0].parse_mode)
+            except Exception:
+                for item in media:
+                    try:
+                        await context.bot.send_photo(
+                            chat_id=update.effective_chat.id,
+                            photo=item.media, caption=item.caption,
+                            parse_mode=item.parse_mode)
+                    except Exception:
+                        continue
     except Exception as e:
         traceback.print_exc()
         await context.bot.send_message(
             chat_id=update.effective_chat.id,
-            text="Error performing search. Please try again."
+            text=f"Error performing search: {e}"
         )
 
 
@@ -533,7 +550,7 @@ async def stats(update: Update, context: ContextTypes.DEFAULT_TYPE):
         traceback.print_exc()
         await context.bot.send_message(
             chat_id=update.effective_chat.id,
-            text="Error getting stats. Please try again."
+            text=f"Error getting stats: {e}"
         )
 
 

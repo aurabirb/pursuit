@@ -13,7 +13,7 @@ from tempfile import NamedTemporaryFile
 from aiohttp import web
 from dotenv import load_dotenv
 from PIL import Image
-from telegram import Update
+from telegram import ReactionTypeEmoji, Update
 from telegram.ext import (
     ApplicationBuilder,
     CommandHandler,
@@ -230,6 +230,14 @@ def make_tgbot_post_id(chat_id: int, msg_id: int, file_id: str) -> str:
     return f"{chat_id}_{msg_id}_{file_id}"
 
 
+async def _react(message, emoji: str):
+    """Set a reaction on a message. Best-effort, silently ignores errors."""
+    try:
+        await message.set_reaction([ReactionTypeEmoji(emoji=emoji)])
+    except Exception:
+        pass
+
+
 def _get_sender_url(user) -> Optional[str]:
     """Get a t.me/ URL for a Telegram user, or user ID as fallback."""
     if user and user.username:
@@ -247,6 +255,7 @@ async def add_photo(update: Update, context: ContextTypes.DEFAULT_TYPE, characte
         photo_message: If provided, use this message's photo instead of update.message.
     """
     msg = photo_message or update.message
+    await _react(update.message, "🗿")
     attachment = msg.effective_attachment
     new_file = await attachment[-1].get_file()
     user = update.effective_user
@@ -292,8 +301,11 @@ async def add_photo(update: Update, context: ContextTypes.DEFAULT_TYPE, characte
 
 
 async def identify_and_send(context: ContextTypes.DEFAULT_TYPE, chat_id: int,
-                           photo_attachment, reply_to_message_id: int = None):
+                           photo_attachment, reply_to_message_id: int = None,
+                           react_message=None):
     """Download photo, identify characters, and send annotated result."""
+    if react_message:
+        await _react(react_message, "👀")
     new_file = await photo_attachment[-1].get_file()
     temp_path = await download_tg_file(new_file)
     image = Image.open(temp_path)
@@ -353,7 +365,8 @@ async def identify_and_send(context: ContextTypes.DEFAULT_TYPE, chat_id: int,
 async def identify_photo(update: Update, context: ContextTypes.DEFAULT_TYPE):
     """Identify characters in a directly sent photo."""
     try:
-        await identify_and_send(context, update.effective_chat.id, update.message.effective_attachment)
+        await identify_and_send(context, update.effective_chat.id, update.message.effective_attachment,
+                               react_message=update.message)
     except Exception as e:
         traceback.print_exc()
         await context.bot.send_message(chat_id=update.effective_chat.id, text="Error identifying photo. Please try again.")
@@ -377,7 +390,8 @@ async def whodis(update: Update, context: ContextTypes.DEFAULT_TYPE):
         return
 
     try:
-        await identify_and_send(context, update.effective_chat.id, reply_to.photo, reply_to.message_id)
+        await identify_and_send(context, update.effective_chat.id, reply_to.photo, reply_to.message_id,
+                               react_message=update.message)
     except Exception as e:
         traceback.print_exc()
         await context.bot.send_message(
@@ -459,7 +473,8 @@ async def reply_to_photo(update: Update, context: ContextTypes.DEFAULT_TYPE):
     print(f"  -> proceeding to identify photo", file=sys.stderr)
 
     try:
-        await identify_and_send(context, update.effective_chat.id, reply_to.photo, reply_to.message_id)
+        await identify_and_send(context, update.effective_chat.id, reply_to.photo, reply_to.message_id,
+                               react_message=update.message)
     except Exception as e:
         traceback.print_exc()
         await context.bot.send_message(

@@ -37,12 +37,15 @@ from typing import Optional
 
 # Pattern to match "character:Name" in caption
 CHARACTER_PATTERN = re.compile(r"character:(\S+)", re.IGNORECASE)
+# Pattern to match "/furscan CharName" in caption
+FURSCAN_CAPTION_PATTERN = re.compile(r"^/furscan\s+(.+)", re.IGNORECASE)
 
 # Global instances (lazy loaded)
 _identifiers: Optional[list[FursuitIdentifier]] = None
 _ingestor: Optional[FursuitIngestor] = None
 _barq_image_to_profile: Optional[dict[str, str]] = None
 _barq_nsfw_images: Optional[set[str]] = None
+_tgbot_post_to_uploader: Optional[dict[str, str]] = None
 
 
 def _load_barq_cache():
@@ -81,12 +84,50 @@ def _load_barq_cache():
         print(f"Warning: could not load barq_cache.db: {e}")
 
 
+def _load_tgbot_cache():
+    """Load tgbot cache: post_id→uploaded_by URL mapping from all datasets."""
+    global _tgbot_post_to_uploader
+    _tgbot_post_to_uploader = {}
+    try:
+        identifiers = get_identifiers()
+        for ident in identifiers:
+            conn = ident.db._connect()
+            rows = conn.execute(
+                "SELECT DISTINCT post_id, uploaded_by FROM detections WHERE source = ? AND uploaded_by IS NOT NULL",
+                (SOURCE_TGBOT,)
+            ).fetchall()
+            for post_id, uploaded_by in rows:
+                if post_id not in _tgbot_post_to_uploader:
+                    _tgbot_post_to_uploader[post_id] = uploaded_by
+        print(f"Tgbot cache: {len(_tgbot_post_to_uploader)} post→uploader mappings")
+    except Exception as e:
+        print(f"Warning: could not load tgbot cache: {e}")
+
+
+def _get_tgbot_uploader_url(post_id: str) -> Optional[str]:
+    """Look up a tgbot uploader URL for a post_id."""
+    if _tgbot_post_to_uploader is None:
+        _load_tgbot_cache()
+    return _tgbot_post_to_uploader.get(post_id)
+
+
+def _register_tgbot_uploader(post_id: str, uploaded_by: str):
+    """Register a new tgbot post→uploader mapping in the cache."""
+    if _tgbot_post_to_uploader is None:
+        _load_tgbot_cache()
+    _tgbot_post_to_uploader[post_id] = uploaded_by
+
+
 def _get_page_url(source: Optional[str], post_id: str) -> Optional[str]:
-    """Get a page URL for a detection, preferring barq profile links."""
+    """Get a page URL for a detection, preferring barq profile links and tgbot sender links."""
     if source == "barq":
         profile_url = _get_barq_profile_url(post_id)
         if profile_url:
             return profile_url
+    if source == SOURCE_TGBOT:
+        uploader_url = _get_tgbot_uploader_url(post_id)
+        if uploader_url:
+            return uploader_url
     return get_source_url(source, post_id)
 
 
@@ -158,7 +199,15 @@ async def photo(update: Update, context: ContextTypes.DEFAULT_TYPE):
     caption = update.message.caption or ""
     print(f"Received photo with caption: {caption}")
 
-    # Check if this is an add request
+    # Check if this is an add request via /furscan caption
+    furscan_match = FURSCAN_CAPTION_PATTERN.search(caption)
+    if furscan_match:
+        character_name = re.sub(r"^this\s+is\s+", "", furscan_match.group(1), flags=re.IGNORECASE).strip().lstrip("@")
+        if character_name:
+            await add_photo(update, context, character_name)
+            return
+
+    # Check if this is an add request via character:Name caption
     match = CHARACTER_PATTERN.search(caption)
     if match:
         await add_photo(update, context, match.group(1))
@@ -181,13 +230,28 @@ def make_tgbot_post_id(chat_id: int, msg_id: int, file_id: str) -> str:
     return f"{chat_id}_{msg_id}_{file_id}"
 
 
-async def add_photo(update: Update, context: ContextTypes.DEFAULT_TYPE, character_name: str):
-    """Add a photo to the database for a character."""
-    attachment = update.message.effective_attachment
+def _get_sender_url(user) -> Optional[str]:
+    """Get a t.me/ URL for a Telegram user, or user ID as fallback."""
+    if user and user.username:
+        return f"https://t.me/{user.username}"
+    if user:
+        return str(user.id)
+    return None
+
+
+async def add_photo(update: Update, context: ContextTypes.DEFAULT_TYPE, character_name: str,
+                    photo_message=None):
+    """Add a photo to the database for a character.
+
+    Args:
+        photo_message: If provided, use this message's photo instead of update.message.
+    """
+    msg = photo_message or update.message
+    attachment = msg.effective_attachment
     new_file = await attachment[-1].get_file()
     user = update.effective_user
-    uploaded_by = f"@{user.username}" if user and user.username else (str(user.id) if user else None)
-    post_id = make_tgbot_post_id(update.effective_chat.id, update.message.message_id, new_file.file_id)
+    uploaded_by = _get_sender_url(user)
+    post_id = make_tgbot_post_id(update.effective_chat.id, msg.message_id, new_file.file_id)
     try:
         temp_path = await download_tg_file(new_file)
         # Rename temp file to use post_id so identifier extracts it correctly
@@ -206,6 +270,8 @@ async def add_photo(update: Update, context: ContextTypes.DEFAULT_TYPE, characte
         # os.unlink(temp_path)
 
         if added > 0:
+            if uploaded_by:
+                _register_tgbot_uploader(post_id, uploaded_by)
             await context.bot.send_message(
                 chat_id=update.effective_chat.id,
                 text=f"Added {added} image(s) for character '{character_name}'."
@@ -291,11 +357,11 @@ async def identify_photo(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
 
 async def whodis(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    """Handle /whodis and /furscan commands - identify a photo being replied to."""
+    """Handle /whodis command - identify a photo being replied to."""
     if not update.message or not update.message.reply_to_message:
         await context.bot.send_message(
             chat_id=update.effective_chat.id,
-            text="Reply to a photo with /whodis or /furscan to identify it."
+            text="Reply to a photo with /whodis to identify it."
         )
         return
 
@@ -315,6 +381,52 @@ async def whodis(update: Update, context: ContextTypes.DEFAULT_TYPE):
             chat_id=update.effective_chat.id,
             text="Error identifying photo. Please try again."
         )
+
+
+async def furscan(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """Handle /furscan command.
+
+    With args (e.g. /furscan foxona or /furscan this is @aurabirb):
+        Add the photo to the database with the given character name.
+        Photo can be in the replied-to message or as caption on a photo.
+    Without args:
+        Identify the photo being replied to.
+    """
+    if not update.message:
+        return
+
+    character_name = " ".join(context.args) if context.args else None
+
+    if not character_name:
+        # No name given - fall back to identify behavior
+        await whodis(update, context)
+        return
+
+    # Strip leading @ and "this is" prefix for convenience
+    character_name = re.sub(r"^this\s+is\s+", "", character_name, flags=re.IGNORECASE).strip()
+    character_name = character_name.lstrip("@")
+
+    if not character_name:
+        await context.bot.send_message(
+            chat_id=update.effective_chat.id,
+            text="Please provide a character name. Example: /furscan foxona"
+        )
+        return
+
+    # Find the photo: either in the message itself (caption on photo) or in the replied-to message
+    photo_message = None
+    if update.message.photo:
+        photo_message = update.message
+    elif update.message.reply_to_message and update.message.reply_to_message.photo:
+        photo_message = update.message.reply_to_message
+    else:
+        await context.bot.send_message(
+            chat_id=update.effective_chat.id,
+            text="Reply to a photo with /furscan CharacterName, or send a photo with /furscan CharacterName as caption."
+        )
+        return
+
+    await add_photo(update, context, character_name, photo_message=photo_message)
 
 
 async def reply_to_photo(update: Update, context: ContextTypes.DEFAULT_TYPE):
@@ -357,6 +469,8 @@ async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
     await context.bot.send_message(
         chat_id=update.effective_chat.id,
         text="Send me a photo to identify fursuit characters.\n\n"
+             "To add: reply to a photo with /furscan CharacterName\n"
+             "To add: send photo with caption /furscan CharacterName\n"
              "To add: send photo with caption character:Name\n"
              "To identify in groups: reply to a photo with /whodis or /furscan\n"
              "To search by description: /search blue fox with white markings\n"
@@ -655,7 +769,7 @@ def build_application(token: str):
     app.add_handler(CommandHandler("show", show))
     app.add_handler(CommandHandler("search", search))
     app.add_handler(CommandHandler("whodis", whodis))
-    app.add_handler(CommandHandler("furscan", whodis))
+    app.add_handler(CommandHandler("furscan", furscan))
     app.add_handler(CommandHandler("aitool", aitool.handle_aitool))
     app.add_handler(CommandHandler("restart", restart))
     app.add_handler(CommandHandler("commit", aitool.handle_commit))

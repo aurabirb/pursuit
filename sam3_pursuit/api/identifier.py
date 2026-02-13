@@ -283,7 +283,11 @@ def merge_multi_dataset_results(
             reverse=True,
         )
 
-        merged_matches = [char_best_match[k] for k in ranked[:top_k]]
+        merged_matches = sorted(
+            [char_best_match[k] for k in ranked[:top_k]],
+            key=lambda m: m.confidence,
+            reverse=True,
+        )
         merged.append(SegmentResults(
             segment_index=base_seg.segment_index,
             segment_bbox=base_seg.segment_bbox,

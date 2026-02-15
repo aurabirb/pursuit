@@ -6,6 +6,7 @@ import os
 import random
 import re
 import sys
+import time
 import traceback
 from pathlib import Path
 from tempfile import NamedTemporaryFile
@@ -33,6 +34,7 @@ from sam3_pursuit.api.annotator import annotate_image
 from telegram import InputMediaPhoto
 
 from sam3_pursuit.storage.database import Database, SOURCE_TGBOT, get_git_version, get_source_url, get_source_image_url
+from sam3_pursuit.storage.tracking import IdentificationTracker
 from typing import Optional
 
 # Pattern to match "character:Name" in caption
@@ -43,6 +45,7 @@ FURSCAN_CAPTION_PATTERN = re.compile(r"^/furscan\s+(.+)", re.IGNORECASE)
 # Global instances (lazy loaded)
 _identifiers: Optional[list[FursuitIdentifier]] = None
 _ingestor: Optional[FursuitIngestor] = None
+_tracker: Optional[IdentificationTracker] = None
 _barq_image_to_profile: Optional[dict[str, str]] = None
 _barq_nsfw_images: Optional[set[str]] = None
 _tgbot_post_to_uploader: Optional[dict[str, str]] = None
@@ -178,6 +181,14 @@ def get_ingestor() -> FursuitIngestor:
     return _ingestor
 
 
+def get_tracker() -> IdentificationTracker:
+    """Get or create the identification tracker instance."""
+    global _tracker
+    if _tracker is None:
+        _tracker = IdentificationTracker()
+    return _tracker
+
+
 async def photo(update: Update, context: ContextTypes.DEFAULT_TYPE):
     """Handle photo messages.
 
@@ -302,7 +313,7 @@ async def add_photo(update: Update, context: ContextTypes.DEFAULT_TYPE, characte
 
 async def identify_and_send(context: ContextTypes.DEFAULT_TYPE, chat_id: int,
                            photo_attachment, reply_to_message_id: int = None,
-                           react_message=None):
+                           react_message=None, user=None, message_id: int = None):
     """Download photo, identify characters, and send annotated result."""
     if react_message:
         await _react(react_message, "👀")
@@ -314,20 +325,26 @@ async def identify_and_send(context: ContextTypes.DEFAULT_TYPE, chat_id: int,
 
     def _run_identify():
         all_results = [ident.identify(image, top_k=Config.DEFAULT_TOP_K) for ident in identifiers]
-        return merge_multi_dataset_results(all_results, top_k=Config.DEFAULT_TOP_K)
+        merged = merge_multi_dataset_results(all_results, top_k=Config.DEFAULT_TOP_K)
+        return all_results, merged
 
-    results = await asyncio.to_thread(_run_identify)
+    t0 = time.monotonic()
+    all_results, results = await asyncio.to_thread(_run_identify)
+    processing_time_ms = int((time.monotonic() - t0) * 1000)
 
     reply_kwargs = {"chat_id": chat_id}
     if reply_to_message_id:
         reply_kwargs["reply_to_message_id"] = reply_to_message_id
 
     if not results:
+        _log_tracking(identifiers, all_results, results, [], image, str(temp_path),
+                      processing_time_ms, chat_id, message_id, user)
         await context.bot.send_message(**reply_kwargs, text="No matching characters found.")
         return
 
     min_confidence = Config.DEFAULT_MIN_CONFIDENCE
     lines = []
+    shown_matches = []  # (seg_idx, match, rank_after_merge)
     for i, result in enumerate(results, 1):
         filtered = [m for m in result.matches if m.confidence >= min_confidence]
         if not filtered:
@@ -341,6 +358,10 @@ async def identify_and_send(context: ContextTypes.DEFAULT_TYPE, chat_id: int,
             name_part = f"<a href=\"{url}\">{name}</a>" if url else name
             pct_part = f"<a href=\"{img_url}\">{pct}</a>" if img_url else pct
             lines.append(f"  {n+1}. {name_part} ({pct_part})")
+            shown_matches.append((i - 1, m, n))
+
+    _log_tracking(identifiers, all_results, results, shown_matches, image,
+                  str(temp_path), processing_time_ms, chat_id, message_id, user)
 
     if not lines:
         await context.bot.send_message(**reply_kwargs, text=f"No matches above {min_confidence:.0%} confidence.")
@@ -362,11 +383,78 @@ async def identify_and_send(context: ContextTypes.DEFAULT_TYPE, chat_id: int,
     os.unlink(temp_annotated_path)
 
 
+def _log_tracking(identifiers, all_results, merged_results, shown_matches,
+                  image, image_path, processing_time_ms, chat_id, message_id, user):
+    """Log identification request and matches to tracking DB. Best-effort, never raises."""
+    try:
+        tracker = get_tracker()
+        dataset_names = [Path(ident.db.db_path).stem for ident in identifiers]
+        dataset_embedders = [ident.pipeline.get_embedder_short_name() for ident in identifiers]
+
+        num_segments = len(merged_results) if merged_results else 0
+        request_id = tracker.log_request(
+            telegram_user_id=user.id if user else None,
+            telegram_username=user.username if user else None,
+            telegram_chat_id=chat_id,
+            telegram_message_id=message_id,
+            image_path=image_path,
+            image_width=image.width,
+            image_height=image.height,
+            num_segments=num_segments,
+            num_datasets=len(identifiers),
+            dataset_names=",".join(dataset_names),
+            segmentor_model=Config.SAM3_MODEL,
+            segmentor_concept=Config.DEFAULT_CONCEPT,
+            processing_time_ms=processing_time_ms,
+        )
+
+        if not shown_matches:
+            return
+
+        # Build post_id→(dataset_name, embedder, rank_in_dataset) lookup from all_results
+        # For each dataset's per-segment results, record the rank of each match by post_id
+        post_dataset_rank = {}  # (seg_idx, post_id) → (dataset_name, embedder, rank)
+        for ds_idx, ds_results in enumerate(all_results):
+            ds_name = dataset_names[ds_idx]
+            ds_emb = dataset_embedders[ds_idx]
+            for seg_result in ds_results:
+                for rank, match in enumerate(seg_result.matches):
+                    key = (seg_result.segment_index, match.post_id)
+                    if key not in post_dataset_rank:
+                        post_dataset_rank[key] = (ds_name, ds_emb, rank)
+
+        matches_data = []
+        for seg_idx, match, rank_after_merge in shown_matches:
+            seg = merged_results[seg_idx]
+            key = (seg.segment_index, match.post_id)
+            ds_name, ds_emb, rank_in_ds = post_dataset_rank.get(key, (None, None, None))
+            matches_data.append({
+                "segment_index": seg.segment_index,
+                "segment_bbox": list(seg.segment_bbox),
+                "segment_confidence": seg.segment_confidence,
+                "dataset_name": ds_name,
+                "embedder": ds_emb,
+                "merge_strategy": Config.MERGE_STRATEGY,
+                "character_name": match.character_name,
+                "match_confidence": match.confidence,
+                "match_distance": match.distance,
+                "matched_post_id": match.post_id,
+                "matched_source": match.source,
+                "rank_in_dataset": rank_in_ds,
+                "rank_after_merge": rank_after_merge,
+            })
+        tracker.log_matches(request_id, matches_data)
+    except Exception:
+        traceback.print_exc()
+        print("Warning: failed to log tracking data", file=sys.stderr)
+
+
 async def identify_photo(update: Update, context: ContextTypes.DEFAULT_TYPE):
     """Identify characters in a directly sent photo."""
     try:
         await identify_and_send(context, update.effective_chat.id, update.message.effective_attachment,
-                               react_message=update.message)
+                               react_message=update.message,
+                               user=update.effective_user, message_id=update.message.message_id)
     except Exception as e:
         traceback.print_exc()
         await context.bot.send_message(chat_id=update.effective_chat.id, text="Error identifying photo. Please try again.")
@@ -391,7 +479,8 @@ async def whodis(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
     try:
         await identify_and_send(context, update.effective_chat.id, reply_to.photo, reply_to.message_id,
-                               react_message=update.message)
+                               react_message=update.message,
+                               user=update.effective_user, message_id=reply_to.message_id)
     except Exception as e:
         traceback.print_exc()
         await context.bot.send_message(
@@ -474,7 +563,8 @@ async def reply_to_photo(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
     try:
         await identify_and_send(context, update.effective_chat.id, reply_to.photo, reply_to.message_id,
-                               react_message=update.message)
+                               react_message=update.message,
+                               user=update.effective_user, message_id=reply_to.message_id)
     except Exception as e:
         traceback.print_exc()
         await context.bot.send_message(

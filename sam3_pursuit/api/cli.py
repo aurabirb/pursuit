@@ -117,7 +117,7 @@ Examples:
     parser.add_argument("--dataset", "-d", "-ds", default=Config.DEFAULT_DATASET,
                         help=f"Dataset name (default: {Config.DEFAULT_DATASET}). Sets db/index paths to <name>.db/<name>.index")
     parser.add_argument("--no-segment", "-S", dest="segment", action="store_false", help="Do not use segmentation")
-    parser.add_argument("--device", choices=["cuda", "cpu", "mps"], help="CUDA device for segmentation")
+    parser.add_argument("--device", choices=["cuda", "cpu", "mps"], default="", help="CUDA device for segmentation")
     parser.add_argument("--concept", default=Config.DEFAULT_CONCEPT, help="SAM3 concept")
     parser.add_argument("--background", "-bg", default=Config.DEFAULT_BACKGROUND_MODE,
                         choices=["none", "solid", "blur"],
@@ -181,7 +181,7 @@ Examples:
 
     segment_parser = subparsers.add_parser("segment", help="Test segmentation on an image")
     segment_parser.add_argument("images", nargs="+", help="Image paths")
-    segment_parser.add_argument("--output-dir", "-o", help="Output directory for crops")
+    segment_parser.add_argument("--output-dir", "-o", default="", help="Output directory for crops")
     segment_parser.add_argument("--cache-masks", action="store_true", help="Read and write masks cache")
     segment_parser.add_argument("--source", "-s", required='--cache' in sys.argv, choices=SOURCES_AVAILABLE)
 
@@ -192,6 +192,7 @@ Examples:
     classify_parser.add_argument("--json", action="store_true", help="Output as JSON")
 
     download_parser = subparsers.add_parser("download", help="Download images from external sources")
+    download_parser.add_argument("--output-dir", "-o", default="", help=f"Output directory")
     download_subparsers = download_parser.add_subparsers(dest="source", help="Download source")
 
     furtrack_parser = download_subparsers.add_parser("furtrack", help="Download from FurTrack")
@@ -1062,7 +1063,7 @@ def classify_command(args):
         print(f"Error: Path not found: {target}")
         sys.exit(1)
 
-    classifier = ImageClassifier()
+    classifier = ImageClassifier(device=args.device)
     threshold = args.threshold
 
     if target.is_file():
@@ -1144,13 +1145,13 @@ def download_command(args):
 
         if args.clean:
             from sam3_pursuit.models.classifier import ImageClassifier
-            classifier = ImageClassifier()
+            classifier = ImageClassifier(device=args.device)
             download_barq.clean_images(classifier.fursuit_score, args.threshold)
         else:
             score_fn = None
             if args.skip_non_fursuit:
                 from sam3_pursuit.models.classifier import ImageClassifier
-                classifier = ImageClassifier()
+                classifier = ImageClassifier(device=args.device)
                 score_fn = classifier.fursuit_score
 
             # Build list of (name, lat, lon) to search

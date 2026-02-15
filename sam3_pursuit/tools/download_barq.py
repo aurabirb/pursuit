@@ -521,7 +521,7 @@ def _is_placeholder_name(name: str) -> bool:
 USE_SONA_NAMES = False  # Use fursuit character (sona) names instead of display names
 
 
-def get_folder_name(profile: dict) -> str:
+def get_folder_name(profile: dict):
     """Get folder name as {id}.{readable_name}."""
     pid = profile.get("id") or profile.get("uuid")
 
@@ -723,8 +723,8 @@ async def download_all_profiles(lat: float, lon: float, max_pages: int = 100, al
 
                     new_uuids = [u for u in img_uuids if u not in existing and u not in filtered_uuids and u not in failed_uuids and u not in EXCLUDED_POST_IDS]
                     if max_images and len(existing) + len(new_uuids) > max_images:
-                        print(f'   {get_folder_name(p)}: max images ({max_images}) reached')
-                        continue
+                        print(f'   {folder_name}: max images ({max_images}) reached')
+                        new_uuids = new_uuids[:max_images - len(existing)]
 
                     if not new_uuids:
                         print(f"  {folder_name}: up to date ({len(existing)} images)")

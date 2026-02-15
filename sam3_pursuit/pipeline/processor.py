@@ -114,6 +114,9 @@ class CachedProcessingPipeline:
 
 
     def process(self, image: Image.Image, cache_key: Optional[CacheKey] = None) -> list[ProcessingResult]:
+        if max(*image.size) > Config.MAX_INPUT_IMAGE_SIZE:
+            new_size = self._scale_image_size(image, Config.MAX_INPUT_IMAGE_SIZE)
+            image = image.resize(new_size, Image.Resampling.LANCZOS)
         segmentations, mask_reused = self._segment(image, cache_key)
         proc_results = []
         for seg in segmentations:
@@ -134,7 +137,7 @@ class CachedProcessingPipeline:
             ))
         return proc_results
 
-    def _resize_to_patch_multiple(self, image: Image.Image, target_size: int = 630) -> Image.Image:
+    def _scale_image_size(self, image: Image.Image, target_size: int):
         w, h = image.size
         if w >= h:
             new_w = target_size
@@ -142,6 +145,10 @@ class CachedProcessingPipeline:
         else:
             new_h = target_size
             new_w = int(w * target_size / h)
+        return new_w, new_h
+
+    def _resize_to_patch_multiple(self, image: Image.Image, target_size: int = Config.TARGET_IMAGE_SIZE):
+        new_w, new_h = self._scale_image_size(image, target_size)
         new_w = max(Config.PATCH_SIZE, (new_w // Config.PATCH_SIZE) * Config.PATCH_SIZE)
         new_h = max(Config.PATCH_SIZE, (new_h // Config.PATCH_SIZE) * Config.PATCH_SIZE)
         return image.resize((new_w, new_h), Image.Resampling.LANCZOS)

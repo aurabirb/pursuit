@@ -70,6 +70,7 @@ class Config:
 
     # Image processing
     PATCH_SIZE = 14
+    MAX_INPUT_IMAGE_SIZE = 1280
     TARGET_IMAGE_SIZE = 630
     SAM3_IMAGE_SIZE = 644
 
